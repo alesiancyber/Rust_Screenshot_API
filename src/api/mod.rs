@@ -31,6 +31,7 @@ pub struct ScreenshotResponse {
     decoded_url: String,
     replacement_url: String,
     anonymized_url: String,
+    redirect_chain: Vec<String>,
     identifiers: Vec<Identifier>,
     original_screenshot: Option<String>,
     final_screenshot: Option<String>,
@@ -76,6 +77,7 @@ impl ScreenshotResponse {
             decoded_url: url.clone(),
             replacement_url: url.clone(),
             anonymized_url: String::new(),
+            redirect_chain: Vec::new(),
             identifiers: Vec::new(),
             original_screenshot: None,
             final_screenshot: None,
@@ -152,6 +154,7 @@ async fn process_request(
     // Step 2: Check redirect chain
     info!("Checking redirect chain for: {}", parsed_url.anonymized_url);
     let redirect_chain = crawl_redirect_chain(&parsed_url.anonymized_url).await?;
+    response.redirect_chain = redirect_chain.clone();
     let mut ssl_domain = None;
     if let Some(final_url) = redirect_chain.last() {
         response.final_url = final_url.clone();
