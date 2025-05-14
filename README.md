@@ -199,18 +199,99 @@ screenshot_api/
 - Chrome/Chromium browser (for WebDriver)
 - ChromeDriver matching your browser version
 
-### Environment Variables
-```bash
-# API Configuration
-SCREENSHOT_DIR=screenshots
-VIEWPORT_WIDTH=1280
-VIEWPORT_HEIGHT=800
-HEADLESS=true
-WEBDRIVER_URL=http://localhost:9515
+### Installation
 
-# Logging
-RUST_LOG=debug
-```
+1. Install ChromeDriver:
+   ```bash
+   # macOS (using Homebrew)
+   brew install chromedriver
+
+   # Linux (Ubuntu/Debian)
+   sudo apt-get install chromium-chromedriver
+
+   # Windows (using Chocolatey)
+   choco install chromedriver
+   ```
+
+2. Verify ChromeDriver installation:
+   ```bash
+   chromedriver --version
+   ```
+
+3. Make sure ChromeDriver version matches your Chrome browser version:
+   ```bash
+   # Check Chrome version
+   # macOS
+   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --version
+   
+   # Linux
+   google-chrome --version
+   
+   # Windows
+   reg query "HKEY_CURRENT_USER\Software\Google\Chrome\BLBeacon" /v version
+   ```
+
+### Configuration
+
+1. Create a `.env` file in the project root (optional):
+   ```bash
+   # API Configuration
+   SCREENSHOT_DIR=screenshots
+   VIEWPORT_WIDTH=1280
+   VIEWPORT_HEIGHT=800
+   HEADLESS=true
+   WEBDRIVER_URL=http://localhost:9515
+
+   # Logging
+   RUST_LOG=debug
+   ```
+
+2. Start ChromeDriver:
+   ```bash
+   # Start ChromeDriver on port 9515
+   chromedriver --port=9515
+   ```
+
+3. Start the API server:
+   ```bash
+   # With environment variables
+   export SCREENSHOT_DIR=screenshots
+   export VIEWPORT_WIDTH=1280
+   export VIEWPORT_HEIGHT=800
+   export HEADLESS=true
+   export WEBDRIVER_URL=http://localhost:9515
+   export RUST_LOG=debug
+   cargo run
+
+   # Or using the .env file
+   cargo run
+   ```
+
+### Troubleshooting ChromeDriver
+
+1. If you get a security warning on macOS:
+   - Open System Settings > Privacy & Security
+   - Scroll to Security section
+   - Look for ChromeDriver message and click "Allow Anyway"
+   - Or run: `xattr -d com.apple.quarantine $(which chromedriver)`
+
+2. If port 9515 is already in use:
+   ```bash
+   # Find process using the port
+   lsof -i :9515
+   
+   # Kill the process
+   kill <PID>
+   ```
+
+3. If ChromeDriver version doesn't match Chrome:
+   ```bash
+   # Uninstall current version
+   brew uninstall chromedriver
+   
+   # Install specific version
+   brew install chromedriver@<version>
+   ```
 
 ### Development Tools
 - `rustfmt` for code formatting
