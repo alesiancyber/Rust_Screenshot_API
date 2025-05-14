@@ -11,8 +11,13 @@ use crate::utils::url_to_snake_case;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, oneshot};
+use crate::data_classifier::classifier::classify_sensitive;
+use crate::ssl::{CertificateInfo, get_certificate_info_from_url};
+use url;
+use crate::utils::whois::{WhoisResult, lookup};
 
-const QUEUE_SIZE: usize = 2;
+const QUEUE_SIZE: usize = 100; // Increased for production
+// TODO: Make worker count and queue size configurable
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ScreenshotRequest {
@@ -22,20 +27,32 @@ pub struct ScreenshotRequest {
 #[derive(Debug, Serialize)]
 pub struct ScreenshotResponse {
     original_url: String,
-    anonymized_url: String,
     final_url: String,
+    decoded_url: String,
+    replacement_url: String,
+    anonymized_url: String,
     identifiers: Vec<Identifier>,
     original_screenshot: Option<String>,
     final_screenshot: Option<String>,
     status: String,
     message: Option<String>,
+    ssl_info: Option<CertificateInfo>,
+    whois_info: Option<WhoisResult>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct Identifier {
     value: String,
     decoded_value: Option<String>,
-    anonymized_value: Option<String>,
+    value_classification: String,
+    replacement_value: Option<String>,
+    encoded_replacement_value: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    status: String,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,14 +71,18 @@ pub struct ScreenshotJob {
 impl ScreenshotResponse {
     fn new(url: String) -> Self {
         Self {
-            original_url: url,
-            anonymized_url: String::new(),
+            original_url: url.clone(),
             final_url: String::new(),
+            decoded_url: url.clone(),
+            replacement_url: url.clone(),
+            anonymized_url: String::new(),
             identifiers: Vec::new(),
             original_screenshot: None,
             final_screenshot: None,
             status: "pending".to_string(),
             message: None,
+            ssl_info: None,
+            whois_info: None,
         }
     }
 }
@@ -88,22 +109,71 @@ async fn process_request(
     let parsed_url = ParsedUrl::new(&request.url)?;
     response.anonymized_url = parsed_url.anonymized_url.clone();
     
-    // Add identifiers to response
+    // Create decoded URL by replacing base64 values
+    let mut decoded_url = request.url.clone();
+    let mut replacement_url = request.url.clone();
+    
+    // Add identifiers to response with the new structure
     for identifier in &parsed_url.identifiers {
+        // Determine the classification using the classifier module
+        let data_type = if let Some(decoded) = &identifier.decoded_value {
+            if let Some(classification) = classify_sensitive(decoded) {
+                format!("{:?}", classification).to_lowercase()
+            } else {
+                "unknown".to_string()
+            }
+        } else {
+            "unknown".to_string()
+        };
+        
+        // Replace the encoded values with decoded values in decoded_url
+        if let Some(decoded) = &identifier.decoded_value {
+            decoded_url = decoded_url.replace(&identifier.value, decoded);
+        }
+        
+        // Replace the encoded values with replacement values in replacement_url
+        if let Some(anonymized) = &identifier.anonymized_value {
+            replacement_url = replacement_url.replace(&identifier.value, anonymized);
+        }
+        
         response.identifiers.push(Identifier {
             value: identifier.value.clone(),
             decoded_value: identifier.decoded_value.clone(),
-            anonymized_value: identifier.anonymized_value.clone(),
+            value_classification: data_type,
+            replacement_value: identifier.anonymized_value.clone(),
+            encoded_replacement_value: identifier.anonymized_value.clone(),  // This assumes the value is already base64 encoded
         });
     }
-
+    
+    // Update the decoded and replacement URLs
+    response.decoded_url = decoded_url;
+    response.replacement_url = replacement_url;
+    
     // Step 2: Check redirect chain
     info!("Checking redirect chain for: {}", parsed_url.anonymized_url);
     let redirect_chain = crawl_redirect_chain(&parsed_url.anonymized_url).await?;
+    let mut ssl_domain = None;
     if let Some(final_url) = redirect_chain.last() {
         response.final_url = final_url.clone();
+        // Extract domain for SSL check
+        if let Ok(url) = url::Url::parse(final_url) {
+            ssl_domain = url.host_str().map(|s| s.to_string());
+        }
+    } else {
+        // Fallback: use domain from original URL
+        if let Ok(url) = url::Url::parse(&parsed_url.anonymized_url) {
+            ssl_domain = url.host_str().map(|s| s.to_string());
+        }
     }
-
+    // Step 2.5: SSL info
+    response.ssl_info = ssl_domain
+    .map(|domain| format!("https://{}", domain))
+    .as_deref()
+    .and_then(|url| get_certificate_info_from_url(url).ok());
+    
+    // Step 2.6: Whois info
+    response.whois_info = lookup(&request.url).await.ok();
+    
     // Step 3: Take screenshots
     let base_name = url_to_snake_case(&parsed_url.anonymized_url);
     
@@ -113,7 +183,7 @@ async fn process_request(
         &format!("{}_original", base_name)
     ).await?;
     response.original_screenshot = Some(original_screenshot.image_data);
-
+    
     // Take screenshot of final URL if different
     if let Some(final_url) = redirect_chain.last() {
         if final_url != &parsed_url.anonymized_url {
@@ -125,7 +195,7 @@ async fn process_request(
             response.final_screenshot = Some(final_screenshot.image_data);
         }
     }
-
+    
     response.status = "success".to_string();
     Ok(response)
 }
@@ -135,6 +205,14 @@ async fn screenshot_handler(
     config: web::Data<ApiConfig>,
     job_tx: web::Data<mpsc::Sender<ScreenshotJob>>,
 ) -> impl Responder {
+    // Input validation: Only allow http/https URLs
+    if !request.url.starts_with("http://") && !request.url.starts_with("https://") {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            status: "error".to_string(),
+            message: "Invalid URL: must start with http:// or https://".to_string(),
+        });
+    }
+
     let (response_tx, response_rx) = oneshot::channel();
     let job = ScreenshotJob {
         request: request.into_inner(),
@@ -143,15 +221,27 @@ async fn screenshot_handler(
 
     // Try to enqueue the job
     if let Err(_) = job_tx.try_send(job) {
-        return HttpResponse::TooManyRequests().body("Server is busy, try again later.");
+        return HttpResponse::TooManyRequests().json(ErrorResponse {
+            status: "error".to_string(),
+            message: "Server is busy, try again later.".to_string(),
+        });
     }
 
     // Wait for the result
     match timeout(config.request_timeout, response_rx).await {
         Ok(Ok(Ok(response))) => HttpResponse::Ok().json(response),
-        Ok(Ok(Err(e))) => HttpResponse::InternalServerError().body(e),
-        Ok(Err(_)) => HttpResponse::InternalServerError().body("Worker dropped."),
-        Err(_) => HttpResponse::RequestTimeout().body("Request timed out."),
+        Ok(Ok(Err(e))) => HttpResponse::InternalServerError().json(ErrorResponse {
+            status: "error".to_string(),
+            message: e,
+        }),
+        Ok(Err(_)) => HttpResponse::InternalServerError().json(ErrorResponse {
+            status: "error".to_string(),
+            message: "Worker dropped.".to_string(),
+        }),
+        Err(_) => HttpResponse::RequestTimeout().json(ErrorResponse {
+            status: "error".to_string(),
+            message: "Request timed out.".to_string(),
+        }),
     }
 }
 

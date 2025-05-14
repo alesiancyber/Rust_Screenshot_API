@@ -16,7 +16,6 @@ pub struct CrawlerConfig {
     pub request_timeout: Duration,
     pub rate_limit_delay: Duration,
     pub allowed_schemes: Vec<String>,
-    pub allowed_domains: Option<Vec<String>>,
     pub user_agent: String,
 }
 
@@ -28,7 +27,6 @@ impl Default for CrawlerConfig {
             request_timeout: Duration::from_secs(REQUEST_TIMEOUT),
             rate_limit_delay: Duration::from_secs(RATE_LIMIT_DELAY),
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
-            allowed_domains: None,
             user_agent: "ScreenshotAPI/1.0".to_string(),
         }
     }
@@ -128,15 +126,6 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
                 break;
             }
 
-            // Check domain if whitelist is configured
-            if let Some(allowed_domains) = &config.allowed_domains {
-                if let Some(host) = next_parsed.host_str() {
-                    if !allowed_domains.iter().any(|d| host.ends_with(d)) {
-                        error!("Redirect to disallowed domain: {} (from {})", host, current_url);
-                        bail!("Redirect to disallowed domain: {}", host);
-                    }
-                }
-            }
 
             info!("Redirected to: {} (hop {}/{})", next_url, hops + 1, config.max_hops);
             current_url = next_url;
@@ -184,13 +173,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_domain_whitelist() {
-        let config = CrawlerConfig {
-            allowed_domains: Some(vec!["example.com".to_string()]),
-            ..Default::default()
-        };
-        let result = crawl_redirect_chain_with_config("http://httpbin.org/redirect/1", &config).await;
-        assert!(result.is_err());
-    }
 } 

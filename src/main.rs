@@ -1,8 +1,10 @@
+pub mod data_classifier;
 mod api;
 mod screenshot;
 mod url_crawler;
 mod url_parser;
 mod utils;
+mod ssl;
 
 use anyhow::Result;
 use crate::api::{ApiConfig, start_server};
