@@ -292,17 +292,6 @@ The API provides health metrics at `/health`:
 }
 ```
 
-## Deployment
-
-### Docker
-```bash
-# Build image
-docker build -t screenshot-api .
-
-# Run container
-docker run -p 8080:8080 screenshot-api
-```
-
 ### Systemd Service
 ```ini
 [Unit]
