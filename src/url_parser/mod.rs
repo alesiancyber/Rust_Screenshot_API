@@ -3,6 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use log::{debug, info, warn};
 use url::Url;
 use crate::utils::anonymizer::Anonymizer;
+use regex::Regex;
 
 const MAX_URL_LENGTH: usize = 2048;
 const MAX_IDENTIFIERS: usize = 100;
@@ -115,21 +116,25 @@ impl ParsedUrl {
         
         if let Ok(decoded) = BASE64.decode(value_str.as_bytes()) {
             if let Ok(decoded_str) = String::from_utf8(decoded) {
-                info!("Found base64 encoded value in {}: {}", context, decoded_str);
-                let anonymized = anonymizer.anonymize_value(&decoded_str);
-                debug!("Anonymized value: {}", anonymized);
-                identifiers.push(Identifier {
-                    value: value_str.clone(),
-                    decoded_value: Some(decoded_str.clone()),
-                    anonymized_value: Some(anonymized.clone()),
-                });
-                // Replace the original value with the anonymized one in the URL
-                let anonymized_encoded = BASE64.encode(anonymized.as_bytes());
-                debug!("Replacing {} with {} in URL", value_str, anonymized_encoded);
-                *anonymized_url = anonymized_url.replace(
-                    &value_str,
-                    &anonymized_encoded
-                );
+                if is_sensitive(&decoded_str) {
+                    info!("Found sensitive data in {}: {}", context, decoded_str);
+                    let anonymized = anonymizer.anonymize_value(&decoded_str);
+                    debug!("Anonymized value: {}", anonymized);
+                    identifiers.push(Identifier {
+                        value: value_str.clone(),
+                        decoded_value: Some(decoded_str.clone()),
+                        anonymized_value: Some(anonymized.clone()),
+                    });
+                    // Replace the original value with the anonymized one in the URL
+                    let anonymized_encoded = BASE64.encode(anonymized.as_bytes());
+                    debug!("Replacing {} with {} in URL", value_str, anonymized_encoded);
+                    *anonymized_url = anonymized_url.replace(
+                        &value_str,
+                        &anonymized_encoded
+                    );
+                } else {
+                    warn!("Found base64 encoded value in {} but it's not sensitive: {}", context, decoded_str);
+                }
             } else {
                 warn!("Failed to decode base64 value as UTF-8: {}", value_str);
             }
@@ -138,6 +143,15 @@ impl ParsedUrl {
         }
         Ok(())
     }
+}
+
+fn is_sensitive(decoded: &str) -> bool {
+    // Define your sensitive regexes
+    let email_re = Regex::new(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+").unwrap();
+    let phone_re = Regex::new(r"\\+?\\d[\\d -]{8,}\\d").unwrap();
+    // Add more as needed
+
+    email_re.is_match(decoded) || phone_re.is_match(decoded)
 }
 
 #[cfg(test)]
