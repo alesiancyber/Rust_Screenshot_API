@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test Link to Base64 Image</title>
+</head>
+<body>
+  <a href="#" id="openImage" style="font-size:2em;">test</a>
+
+  <script>
+    // Replace this with your actual base64 string (no spaces/newlines)
+    const b64 = "YOUR_BASE64_STRING_HERE";
+
+    document.getElementById('openImage').addEventListener('click', function(e) {
+      e.preventDefault();
+      if (!b64 || b64.length < 100) { // crude check for empty/very short string
+        alert("Base64 string is missing or too short!");
+        return;
+      }
+      const win = window.open();
+      if (!win) {
+        alert("Popup blocked! Please allow popups for this site.");
+        return;
+      }
+      win.document.write(
+        '<!DOCTYPE html><html><head><title>Screenshot</title></head><body>' +
+        '<h2>If you see no image, your base64 string may be invalid or too large.</h2>' +
+        '<img src="data:image/png;base64,' + b64 + '" style="max-width:100%;"/>' +
+        '</body></html>'
+      );
+      win.document.close();
+    });
+  </script>
+</body>
+</html>
