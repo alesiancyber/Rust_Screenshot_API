@@ -1,0 +1,83 @@
+# === Rust/Cargo build artifacts ===
+/target/
+**/*.rs.bk
+
+# === Dependency lock file (optional, keep if you want reproducible builds) ===
+# Cargo.lock
+
+# === IDE/editor files ===
+*.swp
+*.swo
+*.swn
+*.bak
+*.tmp
+*.temp
+*.DS_Store
+*.vscode/
+.idea/
+*.iml
+
+# === Logs and screenshots ===
+/logs/
+/logs/*
+/screenshots/
+/screenshots/*
+
+# === Test output, coverage, and benchmarking ===
+/coverage/
+/htmlcov/
+/*.profraw
+*.gcda
+*.gcno
+*.gcov
+*.profdata
+/benchmarks/
+/benches/
+/test-*.log
+/test-*.out
+
+# === Environment and config files ===
+.env
+.env.*
+*.local
+*.secret
+
+# === Miscellaneous ===
+*.log
+*.out
+*.pid
+*.lock
+*.bak
+*.old
+*.orig
+
+# === OS-specific ===
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# === Git ===
+.git/
+.gitmodules
+.gitattributes
+
+# === Project-specific ===
+# Ignore Python test scripts and results
+*.pyc
+__pycache__/
+test_queue.py
+
+# Ignore any files you might generate for debugging
+*.debug
+*.trace
+*.dump
+
+# Ignore backup files
+*~
