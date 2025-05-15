@@ -30,24 +30,18 @@ pub struct CertificateInfo {
     pub security_status: String,
 }
 
-/// Fetches and analyzes SSL certificate information for a URL
+
+/// Fetches and analyzes SSL certificate information using an already parsed URL
 /// 
-/// This function performs the following steps:
-/// 1. Parses the provided URL to extract the domain
-/// 2. Establishes a TLS connection to the domain
-/// 3. Retrieves the SSL certificate
-/// 4. Processes certificate data into structured information
+/// This function avoids redundant URL parsing when the ParsedUrl is already available.
 /// 
 /// # Arguments
-/// * `url` - The URL to analyze, must include protocol (e.g., "https://example.com")
+/// * `parsed_url` - Already parsed URL containing the domain
 /// 
 /// # Returns
 /// * `Result<CertificateInfo>` - Structured certificate information or an error
-pub fn get_certificate_info_from_url(url: &str) -> Result<CertificateInfo> {
-    // Use your URL parser to extract the domain
-    debug!("Parsing URL: {}", url);
-    let parsed = ParsedUrl::new(url).context("Failed to parse URL")?;
-    let domain = &parsed.domain;
+pub fn get_certificate_info_from_parsed(parsed_url: &ParsedUrl) -> Result<CertificateInfo> {
+    let domain = &parsed_url.domain;
     
     info!("Retrieving SSL certificate for domain: {}", domain);
     

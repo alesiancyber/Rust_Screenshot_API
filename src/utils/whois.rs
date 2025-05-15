@@ -43,25 +43,19 @@ fn extract_field(raw: &str, keys: &[&str]) -> Option<String> {
     None
 }
 
-/// Run a whois lookup for the domain extracted from the given URL using ParsedUrl.
+
+/// Run a whois lookup using an already parsed URL.
 /// 
-/// This function performs the following steps:
-/// 1. Parses the provided URL to extract the domain
-/// 2. Executes the system's whois command for the domain
-/// 3. Parses the whois output to extract relevant information
+/// This function avoids redundant URL parsing when the ParsedUrl is already available.
 /// 
 /// # Arguments
-/// * `url` - The URL to analyze, must include protocol (e.g., "https://example.com")
+/// * `parsed_url` - Already parsed URL containing the domain
 /// 
 /// # Returns
 /// * `Result<WhoisResult>` - Structured whois information or an error
-pub async fn lookup(url: &str) -> Result<WhoisResult> {
-    // Use your URL parser to extract the domain
-    debug!("Parsing URL for whois lookup: {}", url);
-    let parsed = ParsedUrl::new(url).context("Failed to parse URL")?;
-    
+pub async fn lookup_with_parsed(parsed_url: &ParsedUrl) -> Result<WhoisResult> {
     // Use the domain directly
-    let domain = &parsed.domain;
+    let domain = &parsed_url.domain;
     info!("Performing whois lookup for domain: {}", domain);
     
     debug!("Executing whois command for domain: {}", domain);

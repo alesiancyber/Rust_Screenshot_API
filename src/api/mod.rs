@@ -12,9 +12,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, oneshot};
 use crate::data_classifier::classifier::classify_sensitive;
-use crate::ssl::{CertificateInfo, get_certificate_info_from_url};
+use crate::ssl::{CertificateInfo, get_certificate_info_from_parsed};
 use url;
-use crate::utils::whois::{WhoisResult, lookup};
+use crate::utils::whois::{WhoisResult, lookup_with_parsed};
+use std::collections::HashMap;
 
 // Maximum number of jobs that can be queued at once
 const QUEUE_SIZE: usize = 100; // Increased for production
@@ -36,6 +37,9 @@ pub struct ScreenshotResponse {
     replacement_url: String,         // URL with sensitive data replaced
     anonymized_url: String,          // URL with all query params removed
     redirect_chain: Vec<String>,     // All URLs in the redirect chain
+    redirect_hop_count: usize,       // Number of redirects followed
+    referenced_urls: Vec<String>,    // URLs found in parameters or path segments
+    unique_domains: Vec<String>,     // All unique domains found in the URL and its parameters
     identifiers: Vec<Identifier>,    // Sensitive data identified in the URL
     original_screenshot: Option<String>, // Base64 screenshot of original URL
     final_screenshot: Option<String>,    // Base64 screenshot of final URL
@@ -88,6 +92,9 @@ impl ScreenshotResponse {
             replacement_url: url.clone(),
             anonymized_url: String::new(),
             redirect_chain: Vec::new(),
+            redirect_hop_count: 0,
+            referenced_urls: Vec::new(),
+            unique_domains: Vec::new(),
             identifiers: Vec::new(),
             original_screenshot: None,
             final_screenshot: None,
@@ -114,6 +121,9 @@ pub struct ApiConfig {
 /// 
 /// This function performs the following steps:
 /// 1. Parses and analyzes the URL for sensitive data
+///    - Identifies all URLs referenced in parameters
+///    - Finds all unique domains in the URL and parameters
+///    - Analyzes URL parameters that contain other URLs
 /// 2. Follows the redirect chain to the final destination
 /// 3. Captures screenshots of both the original and final URLs
 /// 4. Collects SSL certificate and WHOIS information
@@ -146,6 +156,10 @@ async fn process_request(
     
     response.anonymized_url = parsed_url.anonymized_url.clone();
     trace!("Anonymized URL: {}", response.anonymized_url);
+    
+    // Include URL collection data in response
+    response.referenced_urls = parsed_url.url_collection.referenced_urls.clone();
+    response.unique_domains = parsed_url.url_collection.unique_domains.clone().into_iter().collect();
     
     // Create decoded URL by replacing base64 values
     let mut decoded_url = request.url.clone();
@@ -199,10 +213,10 @@ async fn process_request(
     
     // Step 2: Check redirect chain
     info!("Checking redirect chain for: {}", parsed_url.anonymized_url);
-    let redirect_chain = match crawl_redirect_chain(&parsed_url.anonymized_url).await {
-        Ok(chain) => {
-            debug!("Found redirect chain with {} URLs", chain.len());
-            chain
+    let redirect_result = match crawl_redirect_chain(&parsed_url.anonymized_url).await {
+        Ok(result) => {
+            debug!("Found redirect chain with {} URLs and {} hops", result.chain.len(), result.hop_count);
+            result
         },
         Err(e) => {
             error!("Failed to crawl redirect chain for {}: {}", parsed_url.anonymized_url, e);
@@ -210,10 +224,11 @@ async fn process_request(
         }
     };
     
-    response.redirect_chain = redirect_chain.clone();
+    response.redirect_chain = redirect_result.chain.clone();
+    response.redirect_hop_count = redirect_result.hop_count;
     
     let mut ssl_domain = None;
-    if let Some(final_url) = redirect_chain.last() {
+    if let Some(final_url) = redirect_result.chain.last() {
         info!("Final URL after redirects: {}", final_url);
         response.final_url = final_url.clone();
         // Extract domain for SSL check
@@ -234,20 +249,29 @@ async fn process_request(
     if let Some(domain) = &ssl_domain {
         let ssl_url = format!("https://{}", domain);
         debug!("Retrieving SSL certificate for: {}", ssl_url);
-        match get_certificate_info_from_url(&ssl_url) {
-            Ok(info) => {
-                debug!("SSL certificate info retrieved for {}", domain);
-                response.ssl_info = Some(info);
+        
+        // Create a temporary parsed URL with just the domain for SSL check
+        match ParsedUrl::new(&ssl_url) {
+            Ok(ssl_parsed_url) => {
+                match get_certificate_info_from_parsed(&ssl_parsed_url) {
+                    Ok(info) => {
+                        debug!("SSL certificate info retrieved for {}", domain);
+                        response.ssl_info = Some(info);
+                    },
+                    Err(e) => {
+                        warn!("Failed to get SSL certificate for {}: {}", domain, e);
+                    }
+                }
             },
             Err(e) => {
-                warn!("Failed to get SSL certificate for {}: {}", domain, e);
+                warn!("Failed to parse SSL URL for certificate check: {}", e);
             }
         }
     }
     
-    // Step 2.6: Whois info
-    debug!("Performing WHOIS lookup for URL: {}", request.url);
-    match lookup(&request.url).await {
+    // Step 2.6: Whois info - use the original parsed URL to avoid reparsing
+    debug!("Performing WHOIS lookup for domain: {}", parsed_url.domain);
+    match lookup_with_parsed(&parsed_url).await {
         Ok(info) => {
             debug!("WHOIS information retrieved");
             response.whois_info = Some(info);
@@ -279,7 +303,7 @@ async fn process_request(
     response.original_screenshot = Some(original_screenshot.image_data);
     
     // Take screenshot of final URL if different
-    if let Some(final_url) = redirect_chain.last() {
+    if let Some(final_url) = redirect_result.chain.last() {
         if final_url != &parsed_url.anonymized_url {
             info!("Taking screenshot of final URL: {}", final_url);
             let dest_name = url_to_snake_case(final_url);
@@ -310,6 +334,15 @@ async fn process_request(
 /// 
 /// Validates the request, submits it to the worker queue, and awaits the result
 /// with a timeout.
+/// 
+/// The response includes comprehensive URL analysis data:
+/// - Original, final, decoded, and anonymized URLs
+/// - All URLs in the redirect chain and the number of redirects (hop count)
+/// - All URLs referenced in parameters of the original URL
+/// - All unique domains found in the URL and its parameters
+/// - Any sensitive data identified with their anonymized replacements
+/// - Screenshots of both original and final URLs (if they differ)
+/// - SSL certificate and WHOIS information
 /// 
 /// # Arguments
 /// * `request` - JSON request containing the URL to screenshot

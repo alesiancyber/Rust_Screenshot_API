@@ -11,6 +11,13 @@ const MAX_URL_LENGTH: usize = 2048;
 const REQUEST_TIMEOUT: u64 = 30; // seconds
 const RATE_LIMIT_DELAY: u64 = 1; // seconds
 
+/// Result of a redirect chain crawl, including URLs and hop count
+#[derive(Debug, Clone)]
+pub struct RedirectResult {
+    pub chain: Vec<String>,
+    pub hop_count: usize,
+}
+
 /// Configuration for URL crawler behavior
 /// 
 /// Allows customization of crawler constraints and behavior including
@@ -39,22 +46,24 @@ impl Default for CrawlerConfig {
 
 /// Crawls a URL's redirect chain using default configuration
 /// 
-/// Follows redirects from the starting URL and returns all URLs in the chain.
+/// Follows redirects from the starting URL and returns all URLs in the chain
+/// along with the hop count.
 /// Uses default crawler configuration settings.
 /// 
 /// # Arguments
 /// * `start_url` - The initial URL to begin crawling from
 /// 
 /// # Returns
-/// * `Result<Vec<String>>` - A vector of URLs in the redirect chain or an error
-pub async fn crawl_redirect_chain(start_url: &str) -> Result<Vec<String>> {
+/// * `Result<RedirectResult>` - URLs in the redirect chain and hop count or an error
+pub async fn crawl_redirect_chain(start_url: &str) -> Result<RedirectResult> {
     trace!("crawl_redirect_chain called with URL: {}", start_url);
     crawl_redirect_chain_with_config(start_url, &CrawlerConfig::default()).await
 }
 
 /// Crawls a URL's redirect chain with custom configuration
 /// 
-/// Follows redirects from the starting URL and returns all URLs in the chain.
+/// Follows redirects from the starting URL and returns all URLs in the chain
+/// along with the hop count.
 /// Allows custom crawler behavior through provided configuration.
 /// 
 /// This function performs the following steps:
@@ -62,14 +71,15 @@ pub async fn crawl_redirect_chain(start_url: &str) -> Result<Vec<String>> {
 /// 2. Creates an HTTP client that doesn't auto-follow redirects
 /// 3. Follows redirect chain manually, collecting URLs
 /// 4. Enforces configured limits on hops, schemes, etc.
+/// 5. Returns both the chain and hop count
 /// 
 /// # Arguments
 /// * `start_url` - The initial URL to begin crawling from
 /// * `config` - Custom crawler configuration parameters
 /// 
 /// # Returns
-/// * `Result<Vec<String>>` - A vector of URLs in the redirect chain or an error
-pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerConfig) -> Result<Vec<String>> {
+/// * `Result<RedirectResult>` - URLs in the redirect chain and hop count or an error
+pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerConfig) -> Result<RedirectResult> {
     debug!("Starting URL crawl with config: max_hops={}, max_url_length={}, timeout={:?}, rate_limit={:?}",
         config.max_hops, config.max_url_length, config.request_timeout, config.rate_limit_delay);
 
@@ -218,9 +228,13 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
         }
     }
 
-    info!("Completed URL crawl: found {} URLs in chain", chain.len());
+    info!("Completed URL crawl: found {} URLs in chain with {} hops", chain.len(), hops);
     trace!("Complete redirect chain: {:?}", chain);
-    Ok(chain)
+    
+    Ok(RedirectResult {
+        chain,
+        hop_count: hops,
+    })
 }
 
 #[cfg(test)]
@@ -231,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn test_crawl_redirect_chain() {
         let chain = crawl_redirect_chain("http://httpbin.org/redirect/1").await.unwrap();
-        assert!(chain.len() >= 2);
+        assert!(chain.chain.len() >= 2);
     }
 
     #[tokio::test]
@@ -243,7 +257,7 @@ mod tests {
         let chain = crawl_redirect_chain_with_config("http://httpbin.org/redirect/3", &config)
             .await
             .unwrap();
-        assert!(chain.len() <= 3); // Should stop at max_hops
+        assert!(chain.chain.len() <= 3); // Should stop at max_hops
     }
 
     #[tokio::test]
