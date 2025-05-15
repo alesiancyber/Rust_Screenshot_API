@@ -1,15 +1,20 @@
 use anyhow::{Result, Context, bail};
-use log::{info, warn, debug, error};
+use tracing::{info, warn, debug, error, trace};
 use reqwest::{Client, header::{HeaderMap, HeaderValue, USER_AGENT}};
 use std::collections::HashSet;
 use std::time::Duration;
 use url::Url;
 
+// Constants for crawler configuration
 const MAX_HOPS: usize = 10;
 const MAX_URL_LENGTH: usize = 2048;
 const REQUEST_TIMEOUT: u64 = 30; // seconds
 const RATE_LIMIT_DELAY: u64 = 1; // seconds
 
+/// Configuration for URL crawler behavior
+/// 
+/// Allows customization of crawler constraints and behavior including
+/// hop limits, URL validation, timeouts, and rate limiting.
 pub struct CrawlerConfig {
     pub max_hops: usize,
     pub max_url_length: usize,
@@ -32,10 +37,38 @@ impl Default for CrawlerConfig {
     }
 }
 
+/// Crawls a URL's redirect chain using default configuration
+/// 
+/// Follows redirects from the starting URL and returns all URLs in the chain.
+/// Uses default crawler configuration settings.
+/// 
+/// # Arguments
+/// * `start_url` - The initial URL to begin crawling from
+/// 
+/// # Returns
+/// * `Result<Vec<String>>` - A vector of URLs in the redirect chain or an error
 pub async fn crawl_redirect_chain(start_url: &str) -> Result<Vec<String>> {
+    trace!("crawl_redirect_chain called with URL: {}", start_url);
     crawl_redirect_chain_with_config(start_url, &CrawlerConfig::default()).await
 }
 
+/// Crawls a URL's redirect chain with custom configuration
+/// 
+/// Follows redirects from the starting URL and returns all URLs in the chain.
+/// Allows custom crawler behavior through provided configuration.
+/// 
+/// This function performs the following steps:
+/// 1. Validates the input URL format and constraints
+/// 2. Creates an HTTP client that doesn't auto-follow redirects
+/// 3. Follows redirect chain manually, collecting URLs
+/// 4. Enforces configured limits on hops, schemes, etc.
+/// 
+/// # Arguments
+/// * `start_url` - The initial URL to begin crawling from
+/// * `config` - Custom crawler configuration parameters
+/// 
+/// # Returns
+/// * `Result<Vec<String>>` - A vector of URLs in the redirect chain or an error
 pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerConfig) -> Result<Vec<String>> {
     debug!("Starting URL crawl with config: max_hops={}, max_url_length={}, timeout={:?}, rate_limit={:?}",
         config.max_hops, config.max_url_length, config.request_timeout, config.rate_limit_delay);
@@ -50,8 +83,14 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
         bail!("URL exceeds maximum length of {} characters", config.max_url_length);
     }
 
-    let parsed_url = Url::parse(start_url)
-        .context("Failed to parse URL")?;
+    trace!("Parsing URL: {}", start_url);
+    let parsed_url = match Url::parse(start_url) {
+        Ok(url) => url,
+        Err(e) => {
+            error!("Failed to parse URL '{}': {}", start_url, e);
+            return Err(e).context("Failed to parse URL");
+        }
+    };
 
     // Validate URL scheme
     if !config.allowed_schemes.contains(&parsed_url.scheme().to_string()) {
@@ -62,20 +101,33 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
     debug!("Initializing HTTP client with user agent: {}", config.user_agent);
     // Configure client with custom settings
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_str(&config.user_agent)?);
+    match HeaderValue::from_str(&config.user_agent) {
+        Ok(value) => { headers.insert(USER_AGENT, value); }
+        Err(e) => {
+            error!("Invalid user agent string '{}': {}", config.user_agent, e);
+            return Err(e).context("Failed to create User-Agent header");
+        }
+    }
 
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let client = match Client::builder()
+        .redirect(reqwest::redirect::Policy::none())  // Don't auto-follow redirects
         .timeout(config.request_timeout)
         .default_headers(headers)
         .pool_idle_timeout(Duration::from_secs(90))
-        .build()?;
+        .build() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to build HTTP client: {}", e);
+                return Err(e).context("Failed to build HTTP client");
+            }
+        };
 
     let mut chain = Vec::new();
     let mut visited_urls = HashSet::new();
     let mut current_url = start_url.to_string();
     let mut hops = 0;
 
+    trace!("Beginning redirect chain traversal from {}", current_url);
     loop {
         // Check for redirect loops
         if !visited_urls.insert(current_url.clone()) {
@@ -93,12 +145,16 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
         }
 
         debug!("Sending request to {}", current_url);
-        let resp = client.get(&current_url)
-            .send()
-            .await
-            .context("Failed to send request")?;
+        let resp = match client.get(&current_url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to send request to {}: {}", current_url, e);
+                return Err(e).context(format!("Failed to send request to {}", current_url));
+            }
+        };
 
         debug!("Response status: {}", resp.status());
+        trace!("Response headers: {:?}", resp.headers());
 
         if let Some(location) = resp.headers().get(reqwest::header::LOCATION) {
             if hops >= config.max_hops {
@@ -106,26 +162,52 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
                 break;
             }
 
-            let location_str = location.to_str()?;
+            let location_str = match location.to_str() {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Invalid redirect location header: {}", e);
+                    return Err(e).context("Failed to parse redirect location header");
+                }
+            };
             debug!("Found redirect location: {}", location_str);
+            
+            // Determine the next URL, resolving relative URLs if needed
             let next_url = if location_str.starts_with("http") {
                 location_str.to_string()
             } else {
                 // Handle relative redirects
-                let base = Url::parse(&current_url)?;
-                base.join(location_str)?.to_string()
+                trace!("Handling relative redirect: {}", location_str);
+                let base = match Url::parse(&current_url) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        error!("Failed to parse current URL '{}' as base for relative redirect: {}", current_url, e);
+                        return Err(e).context("Failed to parse current URL for relative redirect");
+                    }
+                };
+                
+                match base.join(location_str) {
+                    Ok(url) => url.to_string(),
+                    Err(e) => {
+                        error!("Failed to join relative URL '{}' with base '{}': {}", location_str, current_url, e);
+                        return Err(e).context("Failed to resolve relative redirect URL");
+                    }
+                }
             };
 
             // Validate redirect URL
-            let next_parsed = Url::parse(&next_url)
-                .context("Failed to parse redirect URL")?;
+            let next_parsed = match Url::parse(&next_url) {
+                Ok(url) => url,
+                Err(e) => {
+                    error!("Failed to parse redirect URL '{}': {}", next_url, e);
+                    return Err(e).context("Failed to parse redirect URL");
+                }
+            };
 
             // Check scheme
             if !config.allowed_schemes.contains(&next_parsed.scheme().to_string()) {
                 warn!("Redirect to disallowed scheme: {} (from {})", next_parsed.scheme(), current_url);
                 break;
             }
-
 
             info!("Redirected to: {} (hop {}/{})", next_url, hops + 1, config.max_hops);
             current_url = next_url;
@@ -137,6 +219,7 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
     }
 
     info!("Completed URL crawl: found {} URLs in chain", chain.len());
+    trace!("Complete redirect chain: {:?}", chain);
     Ok(chain)
 }
 
@@ -172,5 +255,4 @@ mod tests {
         let result = crawl_redirect_chain_with_config("http://example.com", &config).await;
         assert!(result.is_err());
     }
-
 } 
