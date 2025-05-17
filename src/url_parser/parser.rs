@@ -147,4 +147,57 @@ impl ParsedUrl {
     pub fn anonymized_url(&self) -> &str {
         self.url_collection.anonymized_url()
     }
+
+    /// Creates decoded and replacement URLs from the original URL
+    ///
+    /// This method applies the decoded and anonymized values from identifiers
+    /// to create two variations of the original URL:
+    /// 1. A decoded URL where encoded values are replaced with their decoded form
+    /// 2. A replacement URL where sensitive values are replaced with anonymized versions
+    ///
+    /// # Arguments
+    /// * `original_url` - The original URL to transform
+    ///
+    /// # Returns
+    /// * `(String, String)` - The (decoded_url, replacement_url) tuple
+    pub fn create_decoded_and_replacement_urls(&self, original_url: &str) -> (String, String) {
+        let mut decoded_url = original_url.to_string();
+        let mut replacement_url = original_url.to_string();
+        
+        for identifier in &self.identifiers {
+            // Apply decoded values
+            if let Some(decoded) = &identifier.decoded_value {
+                decoded_url = decoded_url.replace(&identifier.value, decoded);
+            }
+            
+            // Apply anonymized values
+            if let Some(anonymized) = &identifier.anonymized_value {
+                replacement_url = replacement_url.replace(&identifier.value, anonymized);
+            }
+        }
+        
+        debug!("Created decoded URL: {}", decoded_url);
+        debug!("Created replacement URL: {}", replacement_url);
+        
+        (decoded_url, replacement_url)
+    }
+
+    /// Returns identifiers with their decoded values for classification
+    ///
+    /// This method provides a simplified view of the identifiers, focusing
+    /// on the sensitive data for classification purposes.
+    ///
+    /// # Returns
+    /// * `Vec<(String, String)>` - Vector of (original_value, decoded_value) pairs
+    pub fn classify_identifiers(&self) -> Vec<(String, String)> {
+        let mut classifications = Vec::new();
+        
+        for identifier in &self.identifiers {
+            if let Some(decoded) = &identifier.decoded_value {
+                classifications.push((identifier.value.clone(), decoded.clone()));
+            }
+        }
+        
+        classifications
+    }
 }

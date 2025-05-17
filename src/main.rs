@@ -7,7 +7,8 @@ mod utils;
 mod ssl;
 
 use anyhow::Result;
-use crate::api::{ApiConfig, start_server};
+use crate::api::config::ApiConfig;
+use crate::api::start_server;
 use crate::utils::logger::init_logger;
 use std::time::Duration;
 
