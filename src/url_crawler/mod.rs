@@ -4,7 +4,6 @@ use reqwest::{Client, header::{HeaderMap, HeaderValue, USER_AGENT}};
 use std::collections::HashSet;
 use std::time::Duration;
 use url::Url;
-use std::sync::Arc;
 
 // Constants for crawler configuration
 const MAX_HOPS: usize = 10;
@@ -40,7 +39,6 @@ pub struct CrawlerConfig {
     pub pool_idle_timeout: Duration,
     pub pool_max_idle_per_host: usize,
     pub follow_hostname_redirects_only: bool,
-    pub detect_meta_refresh: bool,
 }
 
 impl CrawlerConfig {
@@ -49,70 +47,81 @@ impl CrawlerConfig {
         Self::default()
     }
     
-    /// Sets the maximum number of redirect hops to follow
-    pub fn with_max_hops(mut self, max_hops: usize) -> Self {
-        self.max_hops = max_hops;
-        self
+    /// Checks if a URL scheme is allowed by this configuration
+    #[inline]
+    pub fn is_scheme_allowed(&self, scheme: &str) -> bool {
+        self.allowed_schemes.iter().any(|s| s == scheme)
     }
+}
+
+#[cfg(test)]
+mod builder {
+    use super::*;
     
-    /// Sets the maximum allowed URL length
-    pub fn with_max_url_length(mut self, max_url_length: usize) -> Self {
-        self.max_url_length = max_url_length;
-        self
-    }
-    
-    /// Sets the request timeout duration
-    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = timeout;
-        self
-    }
-    
-    /// Sets the rate limiting delay between requests
-    pub fn with_rate_limit_delay(mut self, delay: Duration) -> Self {
-        self.rate_limit_delay = delay;
-        self
-    }
-    
-    /// Sets the allowed URL schemes
-    pub fn with_allowed_schemes(mut self, schemes: Vec<String>) -> Self {
-        self.allowed_schemes = schemes;
-        self
-    }
-    
-    /// Sets the user agent string
-    pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
-        self.user_agent = user_agent.into();
-        self
-    }
-    
-    /// Sets the connection timeout for establishing new connections
-    pub fn with_connection_timeout(mut self, timeout: Duration) -> Self {
-        self.connection_timeout = timeout;
-        self
-    }
-    
-    /// Sets the idle timeout for connection pool
-    pub fn with_pool_idle_timeout(mut self, timeout: Duration) -> Self {
-        self.pool_idle_timeout = timeout;
-        self
-    }
-    
-    /// Sets the maximum number of idle connections per host
-    pub fn with_pool_max_idle_per_host(mut self, max: usize) -> Self {
-        self.pool_max_idle_per_host = max;
-        self
-    }
-    
-    /// Sets whether to follow redirects only to the same hostname
-    pub fn with_follow_hostname_redirects_only(mut self, only_same_host: bool) -> Self {
-        self.follow_hostname_redirects_only = only_same_host;
-        self
-    }
-    
-    /// Sets whether to detect meta refresh redirects and JavaScript redirects
-    pub fn with_detect_meta_refresh(mut self, detect: bool) -> Self {
-        self.detect_meta_refresh = detect;
-        self
+    impl CrawlerConfig {
+        /// Sets the maximum number of redirect hops to follow
+        pub fn with_max_hops(mut self, max_hops: usize) -> Self {
+            self.max_hops = max_hops;
+            self
+        }
+        
+        /// Sets the maximum allowed URL length
+        pub fn with_max_url_length(mut self, max_url_length: usize) -> Self {
+            self.max_url_length = max_url_length;
+            self
+        }
+        
+        /// Sets the request timeout duration
+        pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+            self.request_timeout = timeout;
+            self
+        }
+        
+        /// Sets the rate limiting delay between requests
+        pub fn with_rate_limit_delay(mut self, delay: Duration) -> Self {
+            self.rate_limit_delay = delay;
+            self
+        }
+        
+        /// Sets the allowed URL schemes
+        pub fn with_allowed_schemes<I, S>(mut self, schemes: I) -> Self 
+        where 
+            I: IntoIterator<Item = S>,
+            S: Into<String>,
+        {
+            self.allowed_schemes = schemes.into_iter().map(|s| s.into()).collect();
+            self
+        }
+        
+        /// Sets the user agent string
+        pub fn with_user_agent<S: Into<String>>(mut self, user_agent: S) -> Self {
+            self.user_agent = user_agent.into();
+            self
+        }
+        
+        /// Sets the connection timeout for establishing new connections
+        pub fn with_connection_timeout(mut self, timeout: Duration) -> Self {
+            self.connection_timeout = timeout;
+            self
+        }
+        
+        /// Sets the idle timeout for connection pool
+        pub fn with_pool_idle_timeout(mut self, timeout: Duration) -> Self {
+            self.pool_idle_timeout = timeout;
+            self
+        }
+        
+        /// Sets the maximum number of idle connections per host
+        pub fn with_pool_max_idle_per_host(mut self, max: usize) -> Self {
+            self.pool_max_idle_per_host = max;
+            self
+        }
+        
+        /// Sets whether to follow redirects only to the same hostname
+        pub fn with_follow_hostname_redirects_only(mut self, only_same_host: bool) -> Self {
+            self.follow_hostname_redirects_only = only_same_host;
+            self
+        }
     }
 }
 
@@ -139,7 +148,6 @@ impl Default for CrawlerConfig {
             pool_idle_timeout: Duration::from_secs(90),
             pool_max_idle_per_host: 10,
             follow_hostname_redirects_only: false,
-            detect_meta_refresh: false,
         }
     }
 }
@@ -157,7 +165,8 @@ impl Default for CrawlerConfig {
 /// * `Result<RedirectResult>` - URLs in the redirect chain and hop count or an error
 pub async fn crawl_redirect_chain(start_url: &str) -> Result<RedirectResult> {
     trace!("crawl_redirect_chain called with URL: {}", start_url);
-    crawl_redirect_chain_with_config(start_url, &CrawlerConfig::default()).await
+    let config = CrawlerConfig::new(); // Make usage explicit
+    crawl_redirect_chain_with_config(start_url, &config).await
 }
 
 /// Crawls a URL's redirect chain with custom configuration
@@ -203,46 +212,49 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
     };
 
     // Validate URL scheme
-    if !config.allowed_schemes.contains(&parsed_url.scheme().to_string()) {
+    if !config.is_scheme_allowed(parsed_url.scheme()) { // Make usage explicit
         error!("Disallowed URL scheme: {}", parsed_url.scheme());
         bail!("URL scheme '{}' is not allowed", parsed_url.scheme());
     }
 
     debug!("Initializing HTTP client with user agent: {}", config.user_agent);
-    // Configure client with custom settings
-    let mut headers = HeaderMap::new();
-    match HeaderValue::from_str(&config.user_agent) {
-        Ok(value) => { headers.insert(USER_AGENT, value); }
-        Err(e) => {
-            error!("Invalid user agent string '{}': {}", config.user_agent, e);
-            return Err(e).context("Failed to create User-Agent header");
-        }
-    }
-
-    let client = match Client::builder()
-        .redirect(reqwest::redirect::Policy::none())  // Don't auto-follow redirects
-        .timeout(config.request_timeout)
-        .connect_timeout(config.connection_timeout)
-        .pool_idle_timeout(config.pool_idle_timeout)
-        .pool_max_idle_per_host(config.pool_max_idle_per_host)
-        .default_headers(headers)
-        .build() {
-            Ok(c) => c,
+    // Configure client with custom settings - optimize header creation
+    let client = {
+        let mut headers = HeaderMap::with_capacity(1); // Pre-allocate with expected size
+        match HeaderValue::from_str(&config.user_agent) {
+            Ok(value) => { headers.insert(USER_AGENT, value); }
             Err(e) => {
-                error!("Failed to build HTTP client: {}", e);
-                return Err(e).context("Failed to build HTTP client");
+                error!("Invalid user agent string '{}': {}", config.user_agent, e);
+                return Err(e).context("Failed to create User-Agent header");
             }
-        };
+        }
+
+        match Client::builder()
+            .redirect(reqwest::redirect::Policy::none())  // Don't auto-follow redirects
+            .timeout(config.request_timeout)
+            .connect_timeout(config.connection_timeout)
+            .pool_idle_timeout(config.pool_idle_timeout)
+            .pool_max_idle_per_host(config.pool_max_idle_per_host)
+            .default_headers(headers)
+            .build() {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Failed to build HTTP client: {}", e);
+                    return Err(e).context("Failed to build HTTP client");
+                }
+            }
+    };
 
     // Pre-allocate vectors with a reasonable capacity to avoid reallocations
     let mut chain = Vec::with_capacity(config.max_hops + 1);
     let mut visited_urls = HashSet::with_capacity(config.max_hops + 1);
     let mut current_url = start_url.to_owned();
+    let mut current_parsed_url = parsed_url;  // Store the initially parsed URL
     let mut hops = 0;
 
     trace!("Beginning redirect chain traversal from {}", current_url);
     loop {
-        // Check for redirect loops
+        // Check for redirect loops - reference strings where possible instead of cloning
         if !visited_urls.insert(current_url.clone()) {
             error!("Redirect loop detected at {}", current_url);
             break;
@@ -250,6 +262,12 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
 
         info!("Crawling URL: {} (hop {}/{})", current_url, hops + 1, config.max_hops);
         chain.push(current_url.clone());
+
+        // Early check for max hops to avoid unnecessary request
+        if hops >= config.max_hops {
+            warn!("Max redirect hops ({}) reached at {}", config.max_hops, current_url);
+            break;
+        }
 
         // Rate limiting
         if hops > 0 {
@@ -280,26 +298,17 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
             // Special handling for httpbin.org/redirect-to which might not have a Location header
             // but has a URL parameter that indicates the redirect target
             let location_str = if location_opt.is_none() && current_url.contains("httpbin.org/redirect-to") {
-                // Try to extract the url parameter from the current URL
-                if let Ok(parsed) = Url::parse(&current_url) {
-                    let pairs: Vec<(String, String)> = parsed.query_pairs()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect();
-                        
-                    // Find the url parameter
-                    let url_param = pairs.iter().find(|(k, _)| k == "url");
-                    
-                    if let Some((_, v)) = url_param {
-                        debug!("Extracted redirect URL from httpbin: {}", v);
-                        v.to_string()
-                    } else {
-                        // No location header and no url parameter
-                        warn!("Redirect status {} without Location header at {} and no URL parameter", status, current_url);
-                        break;
-                    }
+                // Try to extract the url parameter from the current URL - we can use current_parsed_url here
+                // Use a more efficient extraction for query parameters
+                if let Some(param_value) = current_parsed_url.query_pairs()
+                    .find(|(name, _)| name == "url")
+                    .map(|(_, value)| value.into_owned())
+                {
+                    debug!("Extracted redirect URL from httpbin: {}", param_value);
+                    param_value
                 } else {
-                    // Couldn't parse URL
-                    warn!("Redirect status {} with unparseable URL: {}", status, current_url);
+                    // No location header and no url parameter
+                    warn!("Redirect status {} without Location header at {} and no URL parameter", status, current_url);
                     break;
                 }
             } else if let Some(location) = location_opt {
@@ -319,27 +328,13 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
             
             debug!("Found redirect location: {}", location_str);
             
-            // Process the rest as before
-            if hops >= config.max_hops {
-                warn!("Max redirect hops ({}) reached at {}", config.max_hops, current_url);
-                break;
-            }
-
             // Determine the next URL, resolving relative URLs if needed
             let next_url = if location_str.starts_with("http") {
                 location_str
             } else {
-                // Handle relative redirects
+                // Handle relative redirects using our current parsed URL
                 trace!("Handling relative redirect: {}", location_str);
-                let base = match Url::parse(&current_url) {
-                    Ok(url) => url,
-                    Err(e) => {
-                        error!("Failed to parse current URL '{}' as base for relative redirect: {}", current_url, e);
-                        return Err(e).context("Failed to parse current URL for relative redirect");
-                    }
-                };
-                
-                match base.join(&location_str) {
+                match current_parsed_url.join(&location_str) {
                     Ok(url) => url.to_string(),
                     Err(e) => {
                         error!("Failed to join relative URL '{}' with base '{}': {}", location_str, current_url, e);
@@ -348,8 +343,8 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
                 }
             };
 
-            // Validate redirect URL
-            let next_parsed = match Url::parse(&next_url) {
+            // Parse the next URL once
+            let next_parsed_url = match Url::parse(&next_url) {
                 Ok(url) => url,
                 Err(e) => {
                     error!("Failed to parse redirect URL '{}': {}", next_url, e);
@@ -357,16 +352,17 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
                 }
             };
 
-            // Check scheme
-            if !config.allowed_schemes.contains(&next_parsed.scheme().to_string()) {
-                warn!("Redirect to disallowed scheme: {} (from {})", next_parsed.scheme(), current_url);
+            // Check scheme - use as_str() to avoid string allocation
+            let scheme = next_parsed_url.scheme();
+            if !config.allowed_schemes.iter().any(|s| s == scheme) {
+                warn!("Redirect to disallowed scheme: {} (from {})", scheme, current_url);
                 break;
             }
 
             // Check if we should enforce same-host policy
             if config.follow_hostname_redirects_only {
-                let current_host = parsed_url.host_str().unwrap_or("");
-                let next_host = next_parsed.host_str().unwrap_or("");
+                let current_host = current_parsed_url.host_str().unwrap_or("");
+                let next_host = next_parsed_url.host_str().unwrap_or("");
                 
                 if current_host != next_host {
                     warn!("Cross-host redirect from {} to {} not allowed", current_host, next_host);
@@ -376,21 +372,8 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
 
             info!("Redirected to: {} (hop {}/{})", next_url, hops + 2, config.max_hops);
             current_url = next_url;
+            current_parsed_url = next_parsed_url;  // Update the parsed URL
             hops += 1;
-        } else if status == 200 && config.detect_meta_refresh {
-            // For 200 responses, check for meta refresh or JS redirects if enabled
-            let content_type = resp.headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-                
-            if content_type.contains("text/html") {
-                debug!("Checking for meta refresh and JS redirects in HTML");
-                // We'll skip the actual implementation since it would require cloning the response
-                // In a real implementation, you'd search for meta refresh tags and JS redirects here
-            }
-            debug!("No more redirects found, ending crawl");
-            break;
         } else {
             debug!("No more redirects found, ending crawl");
             break;
@@ -406,67 +389,6 @@ pub async fn crawl_redirect_chain_with_config(start_url: &str, config: &CrawlerC
     })
 }
 
-/// Follows multiple URLs in parallel with concurrency control
-/// 
-/// Crawls multiple URLs concurrently while respecting rate limits
-/// and restricting the number of simultaneous connections.
-/// 
-/// # Arguments
-/// * `urls` - List of URLs to crawl
-/// * `config` - Custom crawler configuration parameters
-/// * `max_concurrent` - Maximum number of concurrent requests
-/// 
-/// # Returns
-/// * `Result<Vec<RedirectResult>>` - Results for each URL in the same order
-pub async fn crawl_multiple_urls(
-    urls: &[String], 
-    config: &CrawlerConfig,
-    max_concurrent: usize
-) -> Result<Vec<RedirectResult>> {
-    debug!("Starting parallel crawl of {} URLs with max concurrency {}", 
-           urls.len(), max_concurrent);
-    
-    // Use an Arc<Semaphore> to share between tasks
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
-    let mut handles = Vec::with_capacity(urls.len());
-    
-    // Start tasks for each URL
-    for url in urls {
-        // Clone what we need to move into the task
-        let url = url.clone();
-        let config = config.clone();
-        let semaphore = semaphore.clone();
-        
-        // Spawn a task for this URL
-        let handle = tokio::spawn(async move {
-            // Acquire permit inside the task
-            let _permit = semaphore.acquire().await
-                .context("Failed to acquire semaphore permit")?;
-            
-            match crawl_redirect_chain_with_config(&url, &config).await {
-                Ok(result) => Ok(result),
-                Err(e) => Err(anyhow::anyhow!("Failed to crawl {}: {}", url, e)),
-            }
-        });
-        
-        handles.push(handle);
-    }
-    
-    // Wait for all tasks to complete and collect results
-    let mut results = Vec::with_capacity(urls.len());
-    for handle in handles {
-        // Await the JoinHandle, then unwrap the inner Result
-        let result = handle.await
-            .context("Crawl task panicked")?
-            .context("Crawl task returned error")?;
-            
-        results.push(result);
-    }
-    
-    info!("Completed parallel crawl of {} URLs", urls.len());
-    Ok(results)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,8 +402,7 @@ mod tests {
             .with_request_timeout(Duration::from_secs(10))
             .with_rate_limit_delay(Duration::from_millis(500))
             .with_allowed_schemes(vec!["https".to_string()])
-            .with_user_agent("Test/1.0")
-            .with_detect_meta_refresh(true);
+            .with_user_agent("Test/1.0");
         
         assert_eq!(config.max_hops, 5);
         assert_eq!(config.max_url_length, 1000);
@@ -489,7 +410,6 @@ mod tests {
         assert_eq!(config.rate_limit_delay, Duration::from_millis(500));
         assert_eq!(config.allowed_schemes, vec!["https".to_string()]);
         assert_eq!(config.user_agent, "Test/1.0");
-        assert!(config.detect_meta_refresh);
     }
 
     #[tokio::test]
@@ -524,29 +444,5 @@ mod tests {
         // Should have 3 URLs: original + 2 redirects
         assert_eq!(redirect_result.chain.len(), 3);
         assert_eq!(redirect_result.hop_count, 2);
-    }
-
-    #[tokio::test]
-    #[ignore] // Run only when needed, may hit real services
-    async fn test_multiple_urls() {
-        let urls = vec![
-            "https://example.com".to_string(),
-            "https://google.com".to_string(),
-        ];
-        
-        let config = CrawlerConfig::new()
-            .with_max_hops(2);
-        
-        let results = crawl_multiple_urls(
-            &urls, 
-            &config,
-            2  // max concurrent
-        ).await;
-        
-        assert!(results.is_ok());
-        let results = results.unwrap();
-        
-        // We should have 2 results (one per URL)
-        assert_eq!(results.len(), 2);
     }
 } 

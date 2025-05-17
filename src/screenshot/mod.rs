@@ -6,7 +6,6 @@ mod pool;
 mod taker;
 
 // Public exports
-pub use config::MAX_CONNECTIONS;
 pub use model::Screenshot;
 pub use taker::ScreenshotTaker;
 

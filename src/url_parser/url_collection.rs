@@ -75,16 +75,6 @@ impl UrlCollection {
         Ok(())
     }
 
-    /// Add multiple referenced URLs at once
-    pub fn add_multiple_urls<'a, I>(&mut self, urls: I) -> Result<()> 
-    where 
-        I: IntoIterator<Item = (&'a str, Option<&'a str>)>
-    {
-        for (url, param_name) in urls {
-            self.add_referenced_url(url, param_name)?;
-        }
-        Ok(())
-    }
     
     /// Extract detailed domain information from a URL string
     pub fn extract_domain_info(url_str: &str) -> Result<DomainInfo> {
@@ -178,25 +168,6 @@ impl UrlCollection {
         &self.unique_domains
     }
 
-    /// Get parameter URLs
-    pub fn parameter_urls(&self) -> &HashMap<String, String> {
-        &self.parameter_urls
-    }
-
-    /// Search for URLs containing a specific domain
-    pub fn find_urls_with_domain(&self, domain: &str) -> Vec<&str> {
-        self.referenced_urls
-            .iter()
-            .filter(|url| url.contains(domain))
-            .map(|s| s.as_str())
-            .collect()
-    }
-
-    /// Check if a URL is using HTTPS
-    pub fn is_https(&self, url: &str) -> Result<bool> {
-        let parsed = Url::parse(url)?;
-        Ok(parsed.scheme() == "https")
-    }
 }
 
 // Implement conversions

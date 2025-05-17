@@ -1,19 +1,36 @@
 use std::time::Duration;
+use crate::utils::benchmarking::OperationTimer;
 
-/// Configuration for the API server
-#[derive(Clone)]
+/// Default capacity for the job queue
+pub const QUEUE_SIZE: usize = 10;
+
+/// Configuration for the API
+#[derive(Debug, Clone)]
 pub struct ApiConfig {
-    pub screenshot_dir: String,      // Directory to save screenshots
-    pub viewport_width: u32,         // Width of browser viewport
-    pub viewport_height: u32,        // Height of browser viewport
-    pub headless: bool,              // Whether to run browser in headless mode
-    pub webdriver_url: Option<String>, // WebDriver server URL
-    pub request_timeout: Duration,   // Request timeout duration
+    /// Directory to save screenshots in
+    pub screenshot_dir: String,
+    
+    /// Width of the browser viewport
+    pub viewport_width: u32,
+    
+    /// Height of the browser viewport
+    pub viewport_height: u32,
+    
+    /// Whether to run the browser in headless mode
+    pub headless: bool,
+    
+    /// Optional WebDriver URL (uses default if None)
+    pub webdriver_url: Option<String>,
+    
+    /// Timeout for API requests
+    pub request_timeout: Duration,
+    
+    /// Timer for operation benchmarking
+    pub timer: Option<OperationTimer>,
 }
 
-impl ApiConfig {
-    /// Creates a default configuration
-    pub fn default() -> Self {
+impl Default for ApiConfig {
+    fn default() -> Self {
         Self {
             screenshot_dir: "screenshots".to_string(),
             viewport_width: 1280,
@@ -21,9 +38,7 @@ impl ApiConfig {
             headless: true,
             webdriver_url: None,
             request_timeout: Duration::from_secs(30),
+            timer: Some(OperationTimer::new()),
         }
     }
-}
-
-/// Maximum number of jobs that can be queued at once
-pub const QUEUE_SIZE: usize = 100; // Increased for production 
+} 

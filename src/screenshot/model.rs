@@ -2,6 +2,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 /// Represents a captured screenshot with both file path and base64-encoded data
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Screenshot {
     pub file_path: String,      // Path where the screenshot is saved
     pub image_data: String,     // Base64-encoded image data for API responses
@@ -13,6 +14,7 @@ impl Screenshot {
     /// # Arguments
     /// * `file_path` - Path where the screenshot is saved
     /// * `image_data` - Base64-encoded image data
+    #[allow(dead_code)]
     pub fn new(file_path: String, image_data: String) -> Self {
         Self { file_path, image_data }
     }

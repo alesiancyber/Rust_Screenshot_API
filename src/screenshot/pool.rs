@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, MutexGuard, Semaphore};
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::timeout;
 use tracing::{debug, error, info, trace, warn};
 
@@ -232,39 +232,22 @@ impl ConnectionPool {
         // Create a permit guard that will be dropped when this function returns
         // This ensures the permit is always released, even on error paths
         struct PermitGuard<'a> {
-            permit: tokio::sync::SemaphorePermit<'a>,
-            active_counter: &'a AtomicUsize,
-            active: bool,
+            _permit: tokio::sync::SemaphorePermit<'a>,
         }
 
         impl<'a> PermitGuard<'a> {
-            fn new(permit: tokio::sync::SemaphorePermit<'a>, counter: &'a AtomicUsize) -> Self {
-                Self {
-                    permit,
-                    active_counter: counter,
-                    active: false,
-                }
-            }
-
-            fn activate(&mut self) {
-                if !self.active {
-                    self.active_counter.fetch_add(1, Ordering::Release);
-                    self.active = true;
-                }
+            fn new(permit: tokio::sync::SemaphorePermit<'a>) -> Self {
+                Self { _permit: permit }
             }
         }
 
         impl<'a> Drop for PermitGuard<'a> {
             fn drop(&mut self) {
-                // Only decrement if we actually incremented
-                if self.active {
-                    self.active_counter.fetch_sub(1, Ordering::Release);
-                }
                 // Permit is automatically dropped here
             }
         }
 
-        let mut permit_guard = PermitGuard::new(permit, &self.active_connections);
+        let permit_guard = PermitGuard::new(permit);
 
         trace!("Acquired semaphore permit, getting client from pool");
         
@@ -317,9 +300,6 @@ impl ConnectionPool {
                 }
             }
         };
-
-        // Mark the permit as active now that we have a successful client
-        permit_guard.activate();
 
         // Update active connection count (already done by permit_guard.activate)
         let active = self.active_connections.load(Ordering::Acquire);
@@ -385,7 +365,7 @@ impl ConnectionPool {
         self.semaphore.add_permits(1);
         
         // Update active connection count
-        let active = self.active_connections.fetch_sub(1, Ordering::Release) - 1;
+        let active = self.active_connections.fetch_sub(1, Ordering::Release);
         let total = self.total_connections.load(Ordering::Acquire);
         debug!("Client returned to pool. Active connections: {}/{}", active, total);
     }
@@ -405,7 +385,7 @@ impl ConnectionPool {
         self.semaphore.add_permits(1);
         
         // Update active connection count
-        let active = self.active_connections.fetch_sub(1, Ordering::Release) - 1;
+        let active = self.active_connections.fetch_sub(1, Ordering::Release);
         let total = self.total_connections.load(Ordering::Acquire);
         debug!("Client discarded. Active connections: {}/{}", active, total);
     }

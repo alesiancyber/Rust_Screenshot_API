@@ -1,6 +1,7 @@
 pub mod logger;
 pub mod anonymizer;
 pub mod whois;
+pub mod benchmarking;
 
 pub fn url_to_snake_case(url: &str) -> String {
     let mut s = url.to_lowercase();

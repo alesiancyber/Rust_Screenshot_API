@@ -10,6 +10,7 @@ use crate::api::models::{ScreenshotJob, ScreenshotRequest, ErrorResponse, Health
 use crate::api::config::ApiConfig;
 use crate::screenshot::ScreenshotTaker;
 use crate::url_parser::ParsedUrl;
+use crate::utils::benchmarking::{OperationTimer, OperationType};
 
 /// HTTP handler for screenshot requests
 /// 
@@ -24,6 +25,7 @@ use crate::url_parser::ParsedUrl;
 /// - Any sensitive data identified with their anonymized replacements
 /// - Screenshots of both original and final URLs (if they differ)
 /// - SSL certificate and WHOIS information
+/// - Timing information for all operations involved in processing the request
 /// 
 /// # Arguments
 /// * `request` - JSON request containing the URL to screenshot
@@ -40,10 +42,27 @@ pub async fn screenshot_handler(
 ) -> impl Responder {
     info!("Received screenshot request for URL: {}", request.url);
     
+    // Get or create a timer for this request
+    let request_timer = match &config.timer {
+        Some(timer) => timer.clone(),
+        None => {
+            debug!("No global timer configured, creating request-specific timer");
+            OperationTimer::new()
+        }
+    };
+    
+    // Start timing the overall request handling
+    request_timer.start_operation("handle_request", OperationType::Asynchronous, None).await;
+    
     // Improved URL validation using the URL parser
-    match ParsedUrl::new(&request.url).await {
+    request_timer.start_operation("validate_url", OperationType::Asynchronous, Some("handle_request")).await;
+    let validation_result = ParsedUrl::new(&request.url).await;
+    request_timer.end_operation("validate_url").await;
+    
+    match validation_result {
         Err(e) => {
             warn!("Rejected invalid URL: {} - {}", request.url, e);
+            request_timer.end_operation("handle_request").await;
             return HttpResponse::BadRequest().json(ErrorResponse {
                 status: "error".to_string(),
                 message: format!("Invalid URL: {}", e),
@@ -63,6 +82,8 @@ pub async fn screenshot_handler(
     let mut attempts = 0;
     let request_url = request.url.clone();
     
+    request_timer.start_operation("enqueue_job", OperationType::Asynchronous, Some("handle_request")).await;
+    
     while attempts < max_attempts {
         // Create a new channel for each attempt
         let (response_tx, response_rx) = oneshot::channel();
@@ -70,17 +91,33 @@ pub async fn screenshot_handler(
         let job = ScreenshotJob {
             request: ScreenshotRequest { url: request_url.clone() },
             response_tx,
+            timer: Some(request_timer.clone()),  // Pass the timer to the job
         };
         
         match job_tx.try_send(job) {
             Ok(_) => {
                 debug!("Job successfully enqueued after {} attempt(s)", attempts + 1);
+                request_timer.end_operation("enqueue_job").await;
                 
                 // Wait for the result
                 debug!("Waiting for result with timeout: {:?}", config.request_timeout);
-                return match timeout(config.request_timeout, response_rx).await {
-                    Ok(Ok(Ok(response))) => {
+                request_timer.start_operation("wait_for_result", OperationType::Blocking, Some("handle_request")).await;
+                
+                let timeout_result = timeout(config.request_timeout, response_rx).await;
+                request_timer.end_operation("wait_for_result").await;
+                request_timer.end_operation("handle_request").await;
+                
+                // Generate timing report
+                let timing_report = request_timer.generate_report().await;
+                info!("Request timing report:\n{}", timing_report);
+                
+                return match timeout_result {
+                    Ok(Ok(Ok(mut response))) => {
                         info!("Screenshot request completed successfully");
+                        
+                        // Add the timing report to the response
+                        response.timing_report = Some(timing_report);
+                        
                         HttpResponse::Ok().json(response)
                     },
                     Ok(Ok(Err(e))) => {
@@ -114,6 +151,8 @@ pub async fn screenshot_handler(
                     // We'll create a new job on the next loop iteration
                 } else {
                     warn!("Queue full after {} attempts, rejecting request", max_attempts);
+                    request_timer.end_operation("enqueue_job").await;
+                    request_timer.end_operation("handle_request").await;
                     return HttpResponse::TooManyRequests().json(ErrorResponse {
                         status: "error".to_string(),
                         message: format!("Server is busy, try again later. Queue has been full for {:?}", retry_delay * attempts as u32),
@@ -122,6 +161,8 @@ pub async fn screenshot_handler(
             },
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 error!("Worker queue has been closed!");
+                request_timer.end_operation("enqueue_job").await;
+                request_timer.end_operation("handle_request").await;
                 return HttpResponse::ServiceUnavailable().json(ErrorResponse {
                     status: "error".to_string(),
                     message: "Service is shutting down or unavailable.".to_string(),
@@ -132,6 +173,8 @@ pub async fn screenshot_handler(
     
     // This should never be reached because we either return success or error inside the loop
     error!("Unexpected code path in screenshot_handler");
+    request_timer.end_operation("enqueue_job").await;
+    request_timer.end_operation("handle_request").await;
     HttpResponse::InternalServerError().json(ErrorResponse {
         status: "error".to_string(),
         message: "Internal error in request handling.".to_string(),

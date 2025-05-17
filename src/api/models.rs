@@ -1,82 +1,130 @@
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use crate::ssl::CertificateInfo;
-use crate::utils::whois::WhoisResult;
 use tokio::sync::oneshot;
-use tracing::trace;
+use crate::utils::whois::WhoisResult;
+use crate::ssl::CertificateInfo;
+use crate::utils::benchmarking::OperationTimer;
 
-/// Represents a request to capture a screenshot of a URL
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Request to take a screenshot
+#[derive(Debug, Deserialize, Clone)]
 pub struct ScreenshotRequest {
+    /// URL to screenshot
     pub url: String,
 }
 
-/// Complete screenshot analysis response including various URL transformations,
-/// screenshots, SSL information, WHOIS data, and identified sensitive information
-#[derive(Debug, Serialize)]
-pub struct ScreenshotResponse {
-    pub original_url: String,            // The URL as provided in the request
-    pub final_url: String,               // The final URL after following redirects
-    pub decoded_url: String,             // URL with encoded parameters decoded
-    pub replacement_url: String,         // URL with sensitive data replaced
-    pub anonymized_url: String,          // URL with all query params removed
-    pub redirect_chain: Vec<String>,     // All URLs in the redirect chain
-    pub redirect_hop_count: usize,       // Number of redirects followed
-    pub referenced_urls: Vec<String>,    // URLs found in parameters or path segments
-    pub unique_domains: Vec<String>,     // All unique domains found in the URL and its parameters
-    pub identifiers: Vec<Identifier>,    // Sensitive data identified in the URL
-    pub original_screenshot: Option<String>, // Base64 screenshot of original URL
-    pub final_screenshot: Option<String>,    // Base64 screenshot of final URL
-    pub status: String,                  // Status of the request (success/error)
-    pub message: Option<String>,         // Optional message, usually for errors
-    pub original_ssl_info: Option<CertificateInfo>, // SSL certificate information for original domain
-    pub final_ssl_info: Option<CertificateInfo>,    // SSL certificate information for final domain
-    pub original_whois_info: Option<WhoisResult>,   // WHOIS domain information for original domain
-    pub final_whois_info: Option<WhoisResult>,      // WHOIS domain information for final domain
-}
-
-/// Represents a piece of identified data in a URL that might be sensitive
-#[derive(Debug, Serialize)]
-pub struct Identifier {
-    pub value: String,                   // Original value found in URL
-    pub decoded_value: Option<String>,   // Decoded value, if encoded
-    pub value_classification: String,    // Classification of the data (PII, etc.)
-    pub replacement_value: Option<String>, // Suggested replacement value
-    pub encoded_replacement_value: Option<String>, // Encoded replacement value
-}
-
-/// Standard error response format for the API
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub status: String,                  // Always "error"
-    pub message: String,                 // Detailed error message
-}
-
-/// Response for health check endpoint
-#[derive(Debug, Serialize)]
-pub struct HealthStatus {
-    pub status: String,                  // healthy, degraded, or unhealthy
-    pub active_connections: usize,       // Number of active browser connections
-    pub total_connections: usize,        // Total browser connections in pool
-    pub uptime: Duration,                // Server uptime
-}
-
-/// Internal job representation for the worker queue
+/// Internal job structure for screenshot tasks
+#[derive(Debug)]
 pub struct ScreenshotJob {
+    /// The screenshot request
     pub request: ScreenshotRequest,
+    
+    /// Sender for the response channel
     pub response_tx: oneshot::Sender<Result<ScreenshotResponse, String>>,
+    
+    /// Optional timer for benchmarking operations
+    pub timer: Option<OperationTimer>,
+}
+
+impl Clone for ScreenshotJob {
+    fn clone(&self) -> Self {
+        // Create a new oneshot channel for the clone
+        let (tx, _) = oneshot::channel();
+        Self {
+            request: self.request.clone(),
+            response_tx: tx,
+            timer: self.timer.clone(),
+        }
+    }
+}
+
+/// Represents a sensitive identifier found in a URL
+#[derive(Debug, Serialize, Clone)]
+pub struct Identifier {
+    /// The original encoded/obfuscated value
+    pub value: String,
+    
+    /// The decoded plain-text value
+    pub decoded_value: Option<String>,
+    
+    /// The type of sensitive data (email, phone, etc.)
+    pub value_classification: String,
+    
+    /// The replacement value used in the anonymized URL
+    pub replacement_value: Option<String>,
+    
+    /// The encoded replacement value
+    pub encoded_replacement_value: Option<String>,
+}
+
+/// Response for a screenshot request
+#[derive(Debug, Serialize, Clone)]
+pub struct ScreenshotResponse {
+    /// Original URL from the request
+    pub original_url: String,
+    
+    /// URL with sensitive data anonymized
+    pub anonymized_url: String,
+    
+    /// URL with base64 and other encoding decoded
+    pub decoded_url: String,
+    
+    /// URL used for the screenshot (with replacements)
+    pub replacement_url: String,
+    
+    /// Final URL after redirects
+    pub final_url: String,
+    
+    /// All URLs in the redirect chain
+    pub redirect_chain: Vec<String>,
+    
+    /// Number of redirects followed
+    pub redirect_hop_count: usize,
+    
+    /// URLs referenced in query parameters
+    pub referenced_urls: Vec<String>,
+    
+    /// All domains found in the URL
+    pub unique_domains: Vec<String>,
+    
+    /// Sensitive identifiers detected
+    pub identifiers: Vec<Identifier>,
+    
+    /// Screenshot of the original URL
+    pub original_screenshot: Option<String>,
+    
+    /// Screenshot of the final URL
+    pub final_screenshot: Option<String>,
+    
+    /// SSL certificate information for original domain
+    pub original_ssl_info: Option<CertificateInfo>,
+    
+    /// SSL certificate information for final domain
+    pub final_ssl_info: Option<CertificateInfo>,
+    
+    /// WHOIS information for original domain
+    pub original_whois_info: Option<WhoisResult>,
+    
+    /// WHOIS information for final domain
+    pub final_whois_info: Option<WhoisResult>,
+    
+    /// Overall request status
+    pub status: String,
+    
+    /// Error message if any
+    pub message: Option<String>,
+    
+    /// Detailed timing report
+    pub timing_report: Option<String>,
 }
 
 impl ScreenshotResponse {
-    /// Creates a new response object initialized with the original URL
+    /// Create a new screenshot response for the given URL
     pub fn new(url: String) -> Self {
-        trace!("Creating new ScreenshotResponse for URL: {}", url);
         Self {
             original_url: url.clone(),
-            final_url: String::new(),
-            decoded_url: url.clone(),
-            replacement_url: url.clone(),
             anonymized_url: String::new(),
+            decoded_url: String::new(),
+            replacement_url: url,
+            final_url: String::new(),
             redirect_chain: Vec::new(),
             redirect_hop_count: 0,
             referenced_urls: Vec::new(),
@@ -84,12 +132,39 @@ impl ScreenshotResponse {
             identifiers: Vec::new(),
             original_screenshot: None,
             final_screenshot: None,
-            status: "pending".to_string(),
-            message: None,
             original_ssl_info: None,
             final_ssl_info: None,
             original_whois_info: None,
             final_whois_info: None,
+            status: "pending".to_string(),
+            message: None,
+            timing_report: None,
         }
     }
+}
+
+/// Health status response for the /health endpoint
+#[derive(Debug, Serialize)]
+pub struct HealthStatus {
+    /// Status indicator: healthy, degraded, or unhealthy
+    pub status: String,
+    
+    /// Number of active connections
+    pub active_connections: usize,
+    
+    /// Total number of connections
+    pub total_connections: usize,
+    
+    /// Server uptime in seconds
+    pub uptime: std::time::Duration,
+}
+
+/// Error response for API endpoints
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    /// Status indicator: error
+    pub status: String,
+    
+    /// Error message details
+    pub message: String,
 } 

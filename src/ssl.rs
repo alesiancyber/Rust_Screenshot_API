@@ -9,7 +9,6 @@ use std::time::Duration as StdDuration;
 use x509_parser::prelude::*;
 use x509_parser::certificate::X509Certificate;
 use crate::url_parser::ParsedUrl;
-use futures::Future;
 
 // Constants for better readability
 const WARNING_DAYS_THRESHOLD: i64 = 30;

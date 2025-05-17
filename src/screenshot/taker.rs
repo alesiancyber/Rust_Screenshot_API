@@ -177,11 +177,25 @@ impl ScreenshotTaker {
             }
         };
         
+        // Get the final URL after redirects
+        let final_url = match client.current_url().await {
+            Ok(url) => url.to_string(),
+            Err(e) => {
+                warn!("Failed to get final URL, using original URL: {}", e);
+                url.to_string()
+            }
+        };
+        
+        // Extract base URLs without parameters
+        let original_base = url.split('?').next().unwrap_or(url);
+        let final_base = final_url.split('?').next().unwrap_or(&final_url);
+        
         // Save to file
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let sanitized_name = sanitize(base_name);
+        let sanitized_original = sanitize(original_base);
+        let sanitized_final = sanitize(final_base);
         let file_path = Path::new(&self.screenshot_dir)
-            .join(format!("{}_{}.png", sanitized_name, timestamp));
+            .join(format!("{}_{}_{}.png", sanitized_original, sanitized_final, timestamp));
             
         debug!("Saving screenshot to {}", file_path.display());
         match fs::write(&file_path, &screenshot_data) {
