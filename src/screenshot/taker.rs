@@ -194,23 +194,36 @@ impl ScreenshotTaker {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let sanitized_original = sanitize(original_base);
         let sanitized_final = sanitize(final_base);
-        let file_path = Path::new(&self.screenshot_dir)
-            .join(format!("{}_{}_{}.png", sanitized_original, sanitized_final, timestamp));
-            
-        debug!("Saving screenshot to {}", file_path.display());
-        match fs::write(&file_path, &screenshot_data) {
-            Ok(_) => trace!("Screenshot file written successfully"),
+        
+        // Save original URL screenshot
+        let original_path = Path::new(&self.screenshot_dir)
+            .join(format!("{}_{}.png", sanitized_original, timestamp));
+        debug!("Saving original URL screenshot to {}", original_path.display());
+        match fs::write(&original_path, &screenshot_data) {
+            Ok(_) => trace!("Original URL screenshot file written successfully"),
             Err(e) => {
-                error!("Failed to write screenshot to {}: {}", file_path.display(), e);
-                return Err(e).context(format!("Failed to write screenshot to {}", file_path.display()));
+                error!("Failed to write original URL screenshot to {}: {}", original_path.display(), e);
+                return Err(e).context(format!("Failed to write original URL screenshot to {}", original_path.display()));
             }
         }
         
-        info!("Screenshot saved to {}", file_path.display());
+        // Save final URL screenshot
+        let final_path = Path::new(&self.screenshot_dir)
+            .join(format!("{}_{}.png", sanitized_final, timestamp));
+        debug!("Saving final URL screenshot to {}", final_path.display());
+        match fs::write(&final_path, &screenshot_data) {
+            Ok(_) => trace!("Final URL screenshot file written successfully"),
+            Err(e) => {
+                error!("Failed to write final URL screenshot to {}: {}", final_path.display(), e);
+                return Err(e).context(format!("Failed to write final URL screenshot to {}", final_path.display()));
+            }
+        }
+        
+        info!("Screenshots saved to {} and {}", original_path.display(), final_path.display());
 
-        // Create Screenshot object
+        // Create Screenshot object using the final URL path
         let screenshot = Screenshot::from_raw(
-            file_path.to_string_lossy().into_owned(),
+            final_path.to_string_lossy().into_owned(),
             &screenshot_data
         );
 

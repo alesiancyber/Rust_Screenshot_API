@@ -132,39 +132,39 @@ impl OperationTimer {
         let sequence = self.operation_sequence.lock().await;
 
         let mut report = String::new();
-        report.push_str("\n=== OPERATION TIMING REPORT ===\n");
+        // report.push_str("\n=== OPERATION TIMING REPORT ===\n");
 
-        // First, show operations in execution order
-        report.push_str("\nOperation Sequence:\n");
-        for (idx, op_name) in sequence.iter().enumerate() {
-            if let Some(op) = completed.get(op_name) {
-                report.push_str(&format!(
-                    "{}. [{}] {} - {} ms\n",
-                    idx + 1,
-                    op.operation_type,
-                    op.name,
-                    op.duration_ms
-                ));
-            }
-        }
+        // // First, show operations in execution order
+        // report.push_str("\nOperation Sequence:\n");
+        // for (idx, op_name) in sequence.iter().enumerate() {
+        //     if let Some(op) = completed.get(op_name) {
+        //         report.push_str(&format!(
+        //             "{}. [{}] {} - {} ms\n",
+        //             idx + 1,
+        //             op.operation_type,
+        //             op.name,
+        //             op.duration_ms
+        //         ));
+        //     }
+        // }
 
-        // Then show a hierarchical view
-        report.push_str("\nOperation Hierarchy:\n");
+        // // Then show a hierarchical view
+        // report.push_str("\nOperation Hierarchy:\n");
         
-        // Get root operations (those without parents)
-        let root_operations: Vec<_> = completed
-            .values()
-            .filter(|op| op.parent.is_none())
-            .collect();
+        // // Get root operations (those without parents)
+        // let root_operations: Vec<_> = completed
+        //     .values()
+        //     .filter(|op| op.parent.is_none())
+        //     .collect();
 
-        // Recursively build the tree
-        for root in root_operations {
-            self.build_hierarchy_report(&mut report, root, &completed, 0);
-        }
+        // // Recursively build the tree
+        // for root in root_operations {
+        //     self.build_hierarchy_report(&mut report, root, &completed, 0);
+        // }
 
-        // Add total execution time
-        let total_time: u64 = completed.values().map(|op| op.duration_ms).sum();
-        report.push_str(&format!("\nTotal Execution Time: {} ms\n", total_time));
+        // // Add total execution time
+        // let total_time: u64 = completed.values().map(|op| op.duration_ms).sum();
+        // report.push_str(&format!("\nTotal Execution Time: {} ms\n", total_time));
 
         report
     }
