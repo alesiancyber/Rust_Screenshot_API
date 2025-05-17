@@ -15,7 +15,6 @@ use crate::data_classifier::classifier::classify_sensitive;
 use crate::ssl::{CertificateInfo, get_certificate_info_from_parsed};
 use url;
 use crate::utils::whois::{WhoisResult, lookup_with_parsed};
-use std::collections::HashMap;
 
 // Maximum number of jobs that can be queued at once
 const QUEUE_SIZE: usize = 100; // Increased for production
@@ -45,8 +44,10 @@ pub struct ScreenshotResponse {
     final_screenshot: Option<String>,    // Base64 screenshot of final URL
     status: String,                  // Status of the request (success/error)
     message: Option<String>,         // Optional message, usually for errors
-    ssl_info: Option<CertificateInfo>, // SSL certificate information
-    whois_info: Option<WhoisResult>, // WHOIS domain information
+    original_ssl_info: Option<CertificateInfo>, // SSL certificate information for original domain
+    final_ssl_info: Option<CertificateInfo>,    // SSL certificate information for final domain
+    original_whois_info: Option<WhoisResult>,   // WHOIS domain information for original domain
+    final_whois_info: Option<WhoisResult>,      // WHOIS domain information for final domain
 }
 
 /// Represents a piece of identified data in a URL that might be sensitive
@@ -100,8 +101,10 @@ impl ScreenshotResponse {
             final_screenshot: None,
             status: "pending".to_string(),
             message: None,
-            ssl_info: None,
-            whois_info: None,
+            original_ssl_info: None,
+            final_ssl_info: None,
+            original_whois_info: None,
+            final_whois_info: None,
         }
     }
 }
@@ -146,7 +149,7 @@ async fn process_request(
     
     // Step 1: Parse and anonymize the URL
     debug!("Parsing URL: {}", request.url);
-    let parsed_url = match ParsedUrl::new(&request.url) {
+    let parsed_url = match ParsedUrl::new(&request.url).await {
         Ok(parsed) => parsed,
         Err(e) => {
             error!("Failed to parse URL {}: {}", request.url, e);
@@ -154,12 +157,9 @@ async fn process_request(
         }
     };
     
-    response.anonymized_url = parsed_url.anonymized_url.clone();
-    trace!("Anonymized URL: {}", response.anonymized_url);
-    
-    // Include URL collection data in response
-    response.referenced_urls = parsed_url.url_collection.referenced_urls.clone();
-    response.unique_domains = parsed_url.url_collection.unique_domains.clone().into_iter().collect();
+    response.anonymized_url = parsed_url.anonymized_url().to_string();
+    response.referenced_urls = parsed_url.url_collection.referenced_urls().to_vec();
+    response.unique_domains = parsed_url.url_collection.unique_domains().clone().into_iter().collect();
     
     // Create decoded URL by replacing base64 values
     let mut decoded_url = request.url.clone();
@@ -212,82 +212,163 @@ async fn process_request(
     response.replacement_url = replacement_url;
     
     // Step 2: Check redirect chain
-    info!("Checking redirect chain for: {}", parsed_url.anonymized_url);
-    let redirect_result = match crawl_redirect_chain(&parsed_url.anonymized_url).await {
+    info!("Checking redirect chain for: {}", response.replacement_url);
+    let redirect_result = match crawl_redirect_chain(&response.replacement_url).await {
         Ok(result) => {
             debug!("Found redirect chain with {} URLs and {} hops", result.chain.len(), result.hop_count);
             result
         },
         Err(e) => {
-            error!("Failed to crawl redirect chain for {}: {}", parsed_url.anonymized_url, e);
-            return Err(e);
+            error!("Failed to crawl redirect chain for {}: {}", response.replacement_url, e);
+            // Fallback to anonymized URL if replacement URL fails
+            match crawl_redirect_chain(parsed_url.anonymized_url()).await {
+                Ok(fallback_result) => {
+                    warn!("Recovered with fallback URL: {}", parsed_url.anonymized_url());
+                    fallback_result
+                },
+                Err(fallback_e) => {
+                    error!("Both primary and fallback redirect crawls failed: {} / {}", e, fallback_e);
+                    return Err(e);
+                }
+            }
         }
     };
     
     response.redirect_chain = redirect_result.chain.clone();
     response.redirect_hop_count = redirect_result.hop_count;
     
-    let mut ssl_domain = None;
+    // Get final URL
     if let Some(final_url) = redirect_result.chain.last() {
         info!("Final URL after redirects: {}", final_url);
         response.final_url = final_url.clone();
-        // Extract domain for SSL check
-        if let Ok(url) = url::Url::parse(final_url) {
-            ssl_domain = url.host_str().map(|s| s.to_string());
-            debug!("Extracted SSL domain: {:?}", ssl_domain);
-        }
     } else {
         // Fallback: use domain from original URL
         debug!("No redirects found, using original domain");
-        if let Ok(url) = url::Url::parse(&parsed_url.anonymized_url) {
-            ssl_domain = url.host_str().map(|s| s.to_string());
-            debug!("Extracted SSL domain from original URL: {:?}", ssl_domain);
-        }
+        response.final_url = response.replacement_url.clone();
     }
     
-    // Step 2.5: SSL info
-    if let Some(domain) = &ssl_domain {
+    // Step 2.5: Get domains for SSL and WHOIS checks
+    let original_domain = if let Ok(url) = url::Url::parse(&response.replacement_url) {
+        url.host_str().map(|s| s.to_string())
+    } else {
+        None
+    };
+
+    let final_domain = if let Some(final_url) = redirect_result.chain.last() {
+        if let Ok(url) = url::Url::parse(final_url) {
+            url.host_str().map(|s| s.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    debug!("Original domain: {:?}, Final domain: {:?}", original_domain, final_domain);
+
+    // Step 2.6: Get SSL certificate info for original domain
+    if let Some(domain) = &original_domain {
         let ssl_url = format!("https://{}", domain);
-        debug!("Retrieving SSL certificate for: {}", ssl_url);
+        debug!("Retrieving SSL certificate for original domain: {}", ssl_url);
         
-        // Create a temporary parsed URL with just the domain for SSL check
-        match ParsedUrl::new(&ssl_url) {
+        match ParsedUrl::new(&ssl_url).await {
             Ok(ssl_parsed_url) => {
                 match get_certificate_info_from_parsed(&ssl_parsed_url) {
                     Ok(info) => {
-                        debug!("SSL certificate info retrieved for {}", domain);
-                        response.ssl_info = Some(info);
+                        debug!("SSL certificate info retrieved for original domain {}", domain);
+                        response.original_ssl_info = Some(info);
                     },
                     Err(e) => {
-                        warn!("Failed to get SSL certificate for {}: {}", domain, e);
+                        warn!("Failed to get SSL certificate for original domain {}: {}", domain, e);
                     }
                 }
             },
             Err(e) => {
-                warn!("Failed to parse SSL URL for certificate check: {}", e);
+                warn!("Failed to parse SSL URL for original domain certificate check: {}", e);
+            }
+        }
+    }
+
+    // Step 2.7: Get SSL certificate info for final domain (if different)
+    if let Some(domain) = &final_domain {
+        // Skip if domains are the same, to avoid duplicate work
+        if original_domain.as_ref() != Some(domain) {
+            let ssl_url = format!("https://{}", domain);
+            debug!("Retrieving SSL certificate for final domain: {}", ssl_url);
+            
+            match ParsedUrl::new(&ssl_url).await {
+                Ok(ssl_parsed_url) => {
+                    match get_certificate_info_from_parsed(&ssl_parsed_url) {
+                        Ok(info) => {
+                            debug!("SSL certificate info retrieved for final domain {}", domain);
+                            response.final_ssl_info = Some(info);
+                        },
+                        Err(e) => {
+                            warn!("Failed to get SSL certificate for final domain {}: {}", domain, e);
+                        }
+                    }
+                },
+                Err(e) => {
+                    warn!("Failed to parse SSL URL for final domain certificate check: {}", e);
+                }
+            }
+        } else {
+            debug!("Final domain is same as original, reusing SSL info");
+            response.final_ssl_info = response.original_ssl_info.clone();
+        }
+    }
+    
+    // Step 2.8: WHOIS info for original domain
+    if let Some(domain) = &original_domain {
+        debug!("Performing WHOIS lookup for original domain: {}", domain);
+        
+        // Create a minimal ParsedUrl for WHOIS lookup
+        let mut minimal_parsed = ParsedUrl::new(&format!("https://{}", domain)).await?;
+        minimal_parsed.domain = domain.clone();
+        
+        match lookup_with_parsed(&minimal_parsed).await {
+            Ok(info) => {
+                debug!("WHOIS information retrieved for original domain");
+                response.original_whois_info = Some(info);
+            },
+            Err(e) => {
+                warn!("Failed to get WHOIS information for original domain: {}", e);
             }
         }
     }
     
-    // Step 2.6: Whois info - use the original parsed URL to avoid reparsing
-    debug!("Performing WHOIS lookup for domain: {}", parsed_url.domain);
-    match lookup_with_parsed(&parsed_url).await {
-        Ok(info) => {
-            debug!("WHOIS information retrieved");
-            response.whois_info = Some(info);
-        },
-        Err(e) => {
-            warn!("Failed to get WHOIS information: {}", e);
+    // Step 2.9: WHOIS info for final domain (if different)
+    if let Some(domain) = &final_domain {
+        // Skip if domains are the same, to avoid duplicate work
+        if original_domain.as_ref() != Some(domain) {
+            debug!("Performing WHOIS lookup for final domain: {}", domain);
+            
+            // Create a minimal ParsedUrl for WHOIS lookup
+            let mut minimal_parsed = ParsedUrl::new(&format!("https://{}", domain)).await?;
+            minimal_parsed.domain = domain.clone();
+            
+            match lookup_with_parsed(&minimal_parsed).await {
+                Ok(info) => {
+                    debug!("WHOIS information retrieved for final domain");
+                    response.final_whois_info = Some(info);
+                },
+                Err(e) => {
+                    warn!("Failed to get WHOIS information for final domain: {}", e);
+                }
+            }
+        } else {
+            debug!("Final domain is same as original, reusing WHOIS info");
+            response.final_whois_info = response.original_whois_info.clone();
         }
     }
     
     // Step 3: Take screenshots
-    let base_name = url_to_snake_case(&parsed_url.anonymized_url);
+    let base_name = url_to_snake_case(&response.replacement_url);
     
-    // Take screenshot of original URL
-    info!("Taking screenshot of original URL: {}", parsed_url.anonymized_url);
+    // Take screenshot of original URL (using replacement_url which preserves redirect URLs)
+    info!("Taking screenshot of original URL: {}", response.replacement_url);
     let original_screenshot = match screenshot_taker.take_screenshot(
-        &parsed_url.anonymized_url,
+        &response.replacement_url,
         &format!("{}_original", base_name)
     ).await {
         Ok(screenshot) => {
@@ -296,7 +377,20 @@ async fn process_request(
         },
         Err(e) => {
             error!("Failed to capture screenshot of original URL: {}", e);
-            return Err(e);
+            // Try fallback to anonymized URL if replacement URL fails
+            match screenshot_taker.take_screenshot(
+                parsed_url.anonymized_url(),
+                &format!("{}_original_fallback", base_name)
+            ).await {
+                Ok(fallback) => {
+                    warn!("Used fallback URL for original screenshot: {}", parsed_url.anonymized_url());
+                    fallback
+                },
+                Err(fallback_e) => {
+                    error!("Both primary and fallback screenshot attempts failed: {} / {}", e, fallback_e);
+                    return Err(e);
+                }
+            }
         }
     };
     
@@ -304,7 +398,7 @@ async fn process_request(
     
     // Take screenshot of final URL if different
     if let Some(final_url) = redirect_result.chain.last() {
-        if final_url != &parsed_url.anonymized_url {
+        if final_url != &response.replacement_url {
             info!("Taking screenshot of final URL: {}", final_url);
             let dest_name = url_to_snake_case(final_url);
             match screenshot_taker.take_screenshot(
@@ -429,8 +523,8 @@ async fn screenshot_handler(
 async fn health_check(screenshot_taker: web::Data<Arc<ScreenshotTaker>>) -> impl Responder {
     debug!("Processing health check request");
     
-    let active = screenshot_taker.active_connections.load(Ordering::SeqCst);
-    let total = screenshot_taker.total_connections.load(Ordering::SeqCst);
+    let active = screenshot_taker.active_connections().load(Ordering::SeqCst);
+    let total = screenshot_taker.total_connections().load(Ordering::SeqCst);
     
     let status = if active < total {
         "healthy"

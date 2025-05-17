@@ -1,0 +1,11 @@
+# Sample URLs for testing
+https://example.com/path?query=value
+https://example.com/api?token=am9obkBleGFtcGxlLmNvbQ==
+https://example.com/redirect?url=https://other-site.com
+https://api.example.com:8443/v1/users?id=12345&token=c2VjcmV0X3Rva2VuX3ZhbHVl
+https://login.example.com?token=c2VjcmV0X3Rva2VuX3ZhbHVl
+https://example.org/search?q=test
+https://example.net/profile/12345
+https://data.example.com/export?format=json
+https://cdn.example.com/images/logo.png
+https://api.example.org/v2/products?category=electronics

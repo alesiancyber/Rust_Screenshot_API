@@ -1,0 +1,9 @@
+Processing 10 URLs from file: test_urls.txt
+
+Summary:
+Processed: 10 URLs
+Successful: 10 URLs
+Failed: 0 URLs
+Total identifiers found: 3
+Total processing time: 5.658125ms
+Average time per URL: 565.812µs

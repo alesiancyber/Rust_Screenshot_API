@@ -1,6 +1,7 @@
 use crate::data_classifier::SensitiveDataType;
 use rand::{seq::SliceRandom, thread_rng};
 
+#[derive(Clone)]
 pub struct Anonymizer {
     // Pre-allocated fake data vectors
     fake_emails: Vec<&'static str>,

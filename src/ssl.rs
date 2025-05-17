@@ -9,6 +9,7 @@ use std::time::Duration as StdDuration;
 use x509_parser::prelude::*;
 use x509_parser::certificate::X509Certificate;
 use crate::url_parser::ParsedUrl;
+use futures::Future;
 
 // Constants for better readability
 const WARNING_DAYS_THRESHOLD: i64 = 30;
@@ -212,12 +213,27 @@ fn process_certificate_data(der: &[u8]) -> Result<CertificateInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::url_parser::ParsedUrl;
+    
+    // Helper trait to run async code in tests
+    trait BlockingExt<T> {
+        fn block_on(self) -> T;
+    }
+
+    impl<F: Future> BlockingExt<F::Output> for F {
+        fn block_on(self) -> F::Output {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(self)
+        }
+    }
     
     #[test]
     #[ignore]
     fn test_get_certificate_info() {
         let url = "https://www.google.com";
-        let cert_info = get_certificate_info_from_url(url).unwrap();
+        let parsed_url = ParsedUrl::new(url).block_on().unwrap();
+        let cert_info = get_certificate_info_from_parsed(&parsed_url).unwrap();
         println!("Issuer: {}", cert_info.issuer);
         println!("Subject: {}", cert_info.subject);
         println!("Valid from: {}", cert_info.valid_from);

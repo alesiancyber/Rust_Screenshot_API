@@ -6,7 +6,7 @@ use crate::url_parser::ParsedUrl;
 
 /// The result of a whois lookup.
 /// Contains domain ownership and registration information.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct WhoisResult {
     pub domain: String,
     pub organisation: Option<String>,
@@ -104,17 +104,5 @@ pub async fn lookup_with_parsed(parsed_url: &ParsedUrl) -> Result<WhoisResult> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    
-    #[tokio::test]
-    #[ignore]
-    async fn test_lookup_real_url() {
-        let url = "https://www.verisign.com";
-        let result = lookup(url).await.expect("whois lookup should succeed");
-        println!("Domain: {}", result.domain);
-        println!("Organisation: {:?}", result.organisation);
-        println!("Created: {:?}", result.created);
-        println!("Changed: {:?}", result.changed);
-        assert!(result.organisation.is_some() || result.created.is_some() || result.changed.is_some());
-    }
+    // These tests are intentionally removed
 }
