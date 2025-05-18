@@ -140,7 +140,7 @@ impl ScreenshotTaker {
     }
 
     /// Implementation of screenshot capture using a specific WebDriver client
-    async fn take_screenshot_with_client(&self, client: &Client, url: &str, base_name: &str) -> Result<Screenshot> {
+    async fn take_screenshot_with_client(&self, client: &Client, url: &str, _base_name: &str) -> Result<Screenshot> {
         // Navigate to the URL
         debug!("Navigating to URL: {}", url);
         match client.goto(url).await {

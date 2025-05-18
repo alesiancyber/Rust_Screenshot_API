@@ -108,12 +108,12 @@ impl ConnectionPool {
             return Ok(());
         }
         
-        // Calculate usage percentage safely
-        let usage_percent = (active * 100) / total;
+        // Calculate usage percentage safely using floating point
+        let usage_percent = (active as f64 * 100.0) / (total as f64);
         
         // Scale up logic - create client outside of any locks
-        if usage_percent > 80 && total < MAX_CONNECTIONS {
-            debug!("High connection usage ({}%), scaling up from {} connections", 
+        if usage_percent > 80.0 && total < MAX_CONNECTIONS {
+            debug!("High connection usage ({:.1}%), scaling up from {} connections", 
                   usage_percent, total);
             
             // Create new client outside of any lock
@@ -181,8 +181,8 @@ impl ConnectionPool {
             }
         } 
         // Scale down logic - with safe lock management
-        else if usage_percent < 20 && total > MIN_CONNECTIONS {
-            debug!("Low connection usage ({}%), scaling down from {} connections", 
+        else if usage_percent < 20.0 && total > MIN_CONNECTIONS {
+            debug!("Low connection usage ({:.1}%), scaling down from {} connections", 
                   usage_percent, total);
                   
             // Use a timeout to prevent deadlock if the lock is held too long

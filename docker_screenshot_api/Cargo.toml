@@ -1,0 +1,16 @@
+[package]
+name = "docker_screenshot_api"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "docker_screenshot_api"
+path = "src/main.rs"
+
+[dependencies]
+actix-web = "4.4"
+anyhow = "1.0"
+chrono = "0.4"
+fantoccini = "0.19"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] } 
